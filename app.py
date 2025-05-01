@@ -88,54 +88,246 @@ if "measurements" not in st.session_state:
 # CSS personalizado para mejorar la apariencia
 st.markdown("""
 <style>
-    .main {
-        background-color: #f5f5f5;
+    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@100;300;400;500;700&display=swap');
+    
+    * {
+        font-family: 'Roboto', sans-serif;
     }
+    
+    .main {
+        background-color: #f8f9fa;
+    }
+    
     .stApp {
         max-width: 1200px;
         margin: 0 auto;
     }
+    
+    /* Título principal */
+    .title {
+        text-align: center;
+        color: #2c3e50;
+        padding-bottom: 1.5rem;
+        border-bottom: 3px solid #3498db;
+        margin-bottom: 2rem;
+        font-weight: 700;
+        font-size: 2.5rem;
+    }
+    
+    /* Botones */
     .stButton>button {
-        background-color: #4CAF50;
+        background-color: #3498db;
         color: white;
         border-radius: 5px;
         border: none;
         padding: 0.5rem 1rem;
-    }
-    .stButton>button:hover {
-        background-color: #45a049;
-    }
-    .report-btn {
-        background-color: #2196F3 !important;
-    }
-    .report-btn:hover {
-        background-color: #0b7dda !important;
-    }
-    .delete-btn {
-        background-color: #f44336 !important;
-    }
-    .delete-btn:hover {
-        background-color: #da190b !important;
-    }
-    .title {
-        text-align: center;
-        color: #333;
-        padding-bottom: 1rem;
-        border-bottom: 2px solid #4CAF50;
-        margin-bottom: 2rem;
-    }
-    .client-card {
-        background-color: white;
-        border-radius: 5px;
-        padding: 1rem;
-        margin-bottom: 1rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
         box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     }
+    
+    .stButton>button:hover {
+        background-color: #2980b9;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    
+    /* Botón de informe */
+    .report-btn {
+        background-color: #2ecc71 !important;
+    }
+    
+    .report-btn:hover {
+        background-color: #27ae60 !important;
+    }
+    
+    /* Botón de eliminación */
+    .delete-btn {
+        background-color: #e74c3c !important;
+    }
+    
+    .delete-btn:hover {
+        background-color: #c0392b !important;
+    }
+    
+    /* Tarjetas de cliente */
+    .client-card {
+        background-color: white;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        transition: all 0.3s ease;
+        border-left: 4px solid #3498db;
+    }
+    
+    .client-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    .client-card h3 {
+        color: #2c3e50;
+        font-weight: 600;
+        margin-bottom: 10px;
+        font-size: 1.3rem;
+    }
+    
+    .client-card p {
+        color: #34495e;
+        margin-bottom: 5px;
+        font-size: 0.95rem;
+    }
+    
+    /* Tarjetas de medición */
     .measurement-card {
-        background-color: rgba(240, 249, 235, 0.8);
+        background-color: rgba(240, 249, 255, 0.8);
+        border-radius: 8px;
+        padding: 0.8rem;
+        margin-bottom: 0.8rem;
+        border-left: 3px solid #3498db;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    
+    /* Encabezados de sección */
+    h2, h3, .stSubheader {
+        color: #2c3e50 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Personalización de widgets */
+    .stSlider {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+    
+    .stSlider > div {
+        padding-top: 0.5rem;
+        padding-bottom: 1.5rem;
+    }
+    
+    /* Barra de navegación por pestañas */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: transparent;
+        border-radius: 5px 5px 0 0;
+        border: none;
+        font-weight: 500;
+        color: #7f8c8d;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #3498db !important;
+        color: white !important;
+    }
+    
+    /* Contenedor de video */
+    .stImage {
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    
+    /* Expanders */
+    .streamlit-expanderHeader {
+        font-weight: 600;
+        color: #2c3e50;
+        background-color: #f8f9fa;
         border-radius: 5px;
+    }
+    
+    .streamlit-expanderContent {
+        border-left: 2px solid #3498db;
+        padding-left: 1rem;
+    }
+    
+    /* Text inputs */
+    .stTextInput input, .stTextArea textarea, .stNumberInput input, .stSelectbox, .stDateInput input {
+        border-radius: 5px;
+        border: 1px solid #e0e0e0;
         padding: 0.5rem;
-        margin-bottom: 0.5rem;
+    }
+    
+    .stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus {
+        border-color: #3498db;
+        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+    }
+    
+    /* Formularios */
+    [data-testid="stForm"] {
+        background-color: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+    
+    /* Controles de video */
+    .video-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+    }
+    
+    /* Botones de control de frame */
+    .frame-button {
+        background-color: #7f8c8d !important;
+        color: white !important;
+        width: 60px !important;
+        text-align: center !important;
+    }
+    
+    .frame-button:hover {
+        background-color: #95a5a6 !important;
+    }
+    
+    /* Mostrar tiempo de video de manera más visible */
+    .video-time {
+        background-color: rgba(52, 152, 219, 0.1);
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        font-weight: 500;
+        text-align: center;
+        margin-top: 0.5rem;
+        margin-bottom: 1rem;
+        color: #2c3e50;
+    }
+    
+    /* Textos informativos */
+    .info-text {
+        background-color: rgba(46, 204, 113, 0.1);
+        border-left: 3px solid #2ecc71;
+        padding: 0.8rem;
+        border-radius: 0 5px 5px 0;
+        color: #2c3e50;
+    }
+    
+    /* Textos de advertencia */
+    .warning-text {
+        background-color: rgba(241, 196, 15, 0.1);
+        border-left: 3px solid #f1c40f;
+        padding: 0.8rem;
+        border-radius: 0 5px 5px 0;
+        color: #2c3e50;
+    }
+    
+    /* Custom file uploader */
+    [data-testid="stFileUploader"] {
+        border: 2px dashed #3498db;
+        border-radius: 8px;
+        padding: 1rem;
+        background-color: rgba(52, 152, 219, 0.05);
+    }
+    
+    [data-testid="stFileUploader"]:hover {
+        border-color: #2980b9;
+        background-color: rgba(52, 152, 219, 0.1);
     }
 </style>
 """, unsafe_allow_html=True)
