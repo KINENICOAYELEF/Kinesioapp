@@ -19,7 +19,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 import math
-import uuid  # Usando el módulo uuid de la biblioteca estándar
+import uuid
+from streamlit_drawable_canvas import st_canvas
 
 # Configuración de la página
 st.set_page_config(page_title="KinesioApp", page_icon="🏋️", layout="wide")
@@ -31,59 +32,6 @@ os.makedirs("data", exist_ok=True)
 # Archivo para almacenar datos de clientes
 CLIENTS_FILE = "data/clients.json"
 SESSIONS_FILE = "data/sessions.json"
-
-# Funciones de utilidad para la gestión de datos
-def load_clients():
-    if os.path.exists(CLIENTS_FILE):
-        with open(CLIENTS_FILE, "r") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-    else:
-        return {}
-        
-def save_clients(clients):
-    with open(CLIENTS_FILE, "w") as f:
-        json.dump(clients, f)
-
-def load_sessions():
-    if os.path.exists(SESSIONS_FILE):
-        with open(SESSIONS_FILE, "r") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return []
-    else:
-        return []
-        
-def save_sessions(sessions):
-    with open(SESSIONS_FILE, "w") as f:
-        json.dump(sessions, f)
-
-# Estado de la aplicación
-if "current_client" not in st.session_state:
-    st.session_state.current_client = None
-if "current_video" not in st.session_state:
-    st.session_state.current_video = None
-if "current_frame" not in st.session_state:
-    st.session_state.current_frame = None
-if "frame_index" not in st.session_state:
-    st.session_state.frame_index = 0
-if "current_video_path" not in st.session_state:
-    st.session_state.current_video_path = None
-if "angle_points" not in st.session_state:
-    st.session_state.angle_points = []
-if "line_points" not in st.session_state:
-    st.session_state.line_points = []
-if "frame_width" not in st.session_state:
-    st.session_state.frame_width = 0
-if "frame_height" not in st.session_state:
-    st.session_state.frame_height = 0
-if "total_frames" not in st.session_state:
-    st.session_state.total_frames = 0
-if "measurements" not in st.session_state:
-    st.session_state.measurements = []
 
 # CSS personalizado para mejorar la apariencia
 st.markdown("""
@@ -332,6 +280,67 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Funciones de utilidad para la gestión de datos
+def load_clients():
+    if os.path.exists(CLIENTS_FILE):
+        with open(CLIENTS_FILE, "r") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    else:
+        return {}
+        
+def save_clients(clients):
+    with open(CLIENTS_FILE, "w") as f:
+        json.dump(clients, f)
+
+def load_sessions():
+    if os.path.exists(SESSIONS_FILE):
+        with open(SESSIONS_FILE, "r") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return []
+    else:
+        return []
+        
+def save_sessions(sessions):
+    with open(SESSIONS_FILE, "w") as f:
+        json.dump(sessions, f)
+
+# Estado de la aplicación
+if "current_client" not in st.session_state:
+    st.session_state.current_client = None
+if "current_video" not in st.session_state:
+    st.session_state.current_video = None
+if "current_frame" not in st.session_state:
+    st.session_state.current_frame = None
+if "frame_index" not in st.session_state:
+    st.session_state.frame_index = 0
+if "current_video_path" not in st.session_state:
+    st.session_state.current_video_path = None
+if "angle_points" not in st.session_state:
+    st.session_state.angle_points = []
+if "line_points" not in st.session_state:
+    st.session_state.line_points = []
+if "frame_width" not in st.session_state:
+    st.session_state.frame_width = 0
+if "frame_height" not in st.session_state:
+    st.session_state.frame_height = 0
+if "total_frames" not in st.session_state:
+    st.session_state.total_frames = 0
+if "measurements" not in st.session_state:
+    st.session_state.measurements = []
+if "drawing_mode" not in st.session_state:
+    st.session_state.drawing_mode = "line"
+if "stroke_width" not in st.session_state:
+    st.session_state.stroke_width = 3
+if "stroke_color" not in st.session_state:
+    st.session_state.stroke_color = "#FF0000"
+if "canvas_result" not in st.session_state:
+    st.session_state.canvas_result = None
+
 # Funciones para el análisis de video
 def process_video(video_file):
     """Procesa un video y lo almacena temporalmente"""
@@ -403,6 +412,69 @@ def calculate_distance(p1, p2):
     """Calcula la distancia entre dos puntos"""
     return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
 
+def process_canvas_result(canvas_result, drawing_mode, joint="", description=""):
+    """Procesa el resultado del canvas para extraer mediciones"""
+    if not canvas_result or not canvas_result.json_data or "objects" not in canvas_result.json_data:
+        return None
+    
+    objects = canvas_result.json_data["objects"]
+    if not objects:
+        return None
+    
+    # Obtener el último objeto dibujado
+    last_object = objects[-1]
+    
+    if drawing_mode == "line" and "x1" in last_object and "x2" in last_object:
+        # Es una línea
+        p1 = (int(last_object["x1"]), int(last_object["y1"]))
+        p2 = (int(last_object["x2"]), int(last_object["y2"]))
+        
+        distance = calculate_distance(p1, p2)
+        
+        measurement = {
+            "id": str(uuid.uuid4()),
+            "type": "Línea",
+            "value": distance,
+            "description": description or "Medición de distancia",
+            "joint": "N/A",
+            "points": [p1, p2],
+            "frame_index": st.session_state.frame_index,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        return measurement
+    
+    elif drawing_mode == "circle" and len(objects) >= 3:
+        # Para un ángulo necesitamos 3 puntos (círculos)
+        # Tomamos los últimos 3 objetos dibujados
+        if len(objects) >= 3:
+            angle_points = []
+            for i in range(-3, 0):
+                obj = objects[i]
+                if "left" in obj and "top" in obj:
+                    # Calcular el centro del círculo
+                    center_x = int(obj["left"] + obj["radius"])
+                    center_y = int(obj["top"] + obj["radius"])
+                    angle_points.append((center_x, center_y))
+            
+            if len(angle_points) == 3:
+                angle = calculate_angle(angle_points[0], angle_points[1], angle_points[2])
+                
+                measurement = {
+                    "id": str(uuid.uuid4()),
+                    "type": "Ángulo",
+                    "value": angle,
+                    "description": description or f"Ángulo en {joint}",
+                    "joint": joint,
+                    "points": angle_points,
+                    "frame_index": st.session_state.frame_index,
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                return measurement
+    
+    return None
+
 def draw_angle(frame, points, angle, color=(255, 0, 0)):
     """Dibuja un ángulo en el frame"""
     # Dibujar líneas
@@ -436,17 +508,8 @@ def draw_line(frame, points, distance, color=(0, 255, 0)):
     
     return frame
 
-def save_measurement(measurement_type, value, description, joint):
+def save_measurement(measurement):
     """Guarda una medición en el estado de la sesión"""
-    measurement = {
-        "id": str(uuid.uuid4()),
-        "type": measurement_type,
-        "value": value,
-        "description": description,
-        "joint": joint,
-        "frame_index": st.session_state.frame_index,
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
     st.session_state.measurements.append(measurement)
     return measurement
 
@@ -570,6 +633,7 @@ def generate_pdf(client, session_data, measurements, frame_with_analysis, progre
 
 # Interfaz de usuario con Streamlit
 def main():
+    # Aplicamos título con mejor formato
     st.markdown("<h1 class='title'>🏋️ KinesioApp - Análisis Biomecánico</h1>", unsafe_allow_html=True)
     
     # Pestañas de navegación
@@ -745,7 +809,7 @@ def main():
                         get_frame(st.session_state.frame_index + 10)
                 
                 # Tiempo del video
-                st.text(f"Tiempo: {get_time_from_frame(st.session_state.frame_index)}")
+                st.markdown(f"<div class='video-time'>Tiempo: {get_time_from_frame(st.session_state.frame_index)}</div>", unsafe_allow_html=True)
                 
                 # Columnas para frame y herramientas
                 col1, col2 = st.columns([3, 1])
@@ -768,78 +832,99 @@ def main():
                                 if len(points) == 2:
                                     draw_line(frame_display, points, m["value"], color=(0, 255, 0))
                     
-                    # Mostrar el frame con todas las mediciones
-                    st.image(frame_display, channels="RGB", use_column_width=True)
+                    # Configuración del canvas para dibujar mediciones
+                    st.subheader("Dibuja en el frame")
                     
-                    # Mostrar el índice del frame y otros datos
-                    st.text(f"Frame {st.session_state.frame_index + 1} de {st.session_state.total_frames}")
+                    drawing_mode = st.radio(
+                        "Herramienta de dibujo:",
+                        ("line", "circle"),
+                        format_func=lambda x: "Línea" if x == "line" else "Punto (para ángulos)",
+                        horizontal=True
+                    )
+                    
+                    # Configuración personalizada según el modo de dibujo
+                    if drawing_mode == "line":
+                        stroke_color = st.color_picker("Color de línea:", "#00FF00")
+                        stroke_width = st.slider("Grosor de línea:", 1, 5, 3)
+                        st.markdown("**Instrucciones:** Dibuja una línea arrastrando de un punto a otro.")
+                        
+                        # Descripciones para líneas
+                        line_desc = st.text_input("Descripción de la línea:", placeholder="Ej: Longitud del fémur")
+                    else:  # circle para ángulos
+                        stroke_color = st.color_picker("Color de punto:", "#FF0000")
+                        stroke_width = st.slider("Tamaño de punto:", 5, 15, 10)
+                        st.markdown("**Instrucciones:** Dibuja 3 puntos para medir un ángulo. El punto central será el vértice.")
+                        
+                        # Opciones para ángulos
+                        joint_options = ["Rodilla", "Cadera", "Hombro", "Codo", "Tobillo", "Columna", "Otro"]
+                        joint = st.selectbox("Articulación:", joint_options)
+                        angle_desc = st.text_input("Descripción del ángulo:", placeholder="Ej: Flexión de rodilla")
+                    
+                    # Canvas interactivo
+                    canvas_result = st_canvas(
+                        fill_color="rgba(255, 165, 0, 0.3)",
+                        stroke_width=stroke_width,
+                        stroke_color=stroke_color,
+                        background_image=Image.fromarray(frame_display),
+                        height=st.session_state.frame_height,
+                        width=st.session_state.frame_width,
+                        drawing_mode=drawing_mode,
+                        key="canvas",
+                    )
+                    
+                    # Botón para guardar la medición
+                    if st.button("Guardar Medición"):
+                        if drawing_mode == "line":
+                            measurement = process_canvas_result(canvas_result, drawing_mode, description=line_desc)
+                        else:  # circle para ángulos
+                            measurement = process_canvas_result(canvas_result, drawing_mode, joint=joint, description=angle_desc)
+                        
+                        if measurement:
+                            save_measurement(measurement)
+                            st.success(f"{measurement['type']} guardado correctamente!")
+                            st.experimental_rerun()
+                        else:
+                            st.error("No se pudo procesar la medición. Asegúrate de dibujar correctamente.")
                 
                 # Herramientas de análisis
                 with col2:
                     st.subheader("Herramientas")
                     
-                    # Herramienta de ángulo
-                    with st.expander("Medir Ángulo", expanded=False):
-                        st.write("Haz clic en 3 puntos para medir un ángulo")
-                        
-                        joint_options = ["Rodilla", "Cadera", "Hombro", "Codo", "Tobillo", "Columna", "Otro"]
-                        selected_joint = st.selectbox("Articulación", joint_options, key="angle_joint")
-                        angle_desc = st.text_input("Descripción", placeholder="Ej: Flexión máxima", key="angle_desc")
-                        
-                        # Botón para activar la selección de puntos
-                        if st.button("Seleccionar Puntos (3)", key="select_angle"):
-                            # Implementar selección de puntos aquí (simplificado)
-                            # En una aplicación real, esto se haría con eventos de ratón
-                            # Aquí usamos un ejemplo simplificado
-                            
-                            # Ejemplo de puntos para el ángulo
-                            p1 = (100, 200)
-                            p2 = (200, 300)
-                            p3 = (300, 200)
-                            
-                            points = [p1, p2, p3]
-                            angle = calculate_angle(p1, p2, p3)
-                            
-                            # Guardar medición
-                            measurement = save_measurement(
-                                "Ángulo", 
-                                angle, 
-                                angle_desc or f"Ángulo en {selected_joint}", 
-                                selected_joint
-                            )
-                            
-                            # Añadir puntos a la medición para referencia
-                            measurement["points"] = points
-                            
-                            st.success(f"Ángulo: {angle:.1f}° - Guardado!")
+                    # Información del frame
+                    st.text(f"Frame {st.session_state.frame_index + 1} de {st.session_state.total_frames}")
+                    st.text(f"Resolución: {st.session_state.frame_width}x{st.session_state.frame_height}")
                     
-                    # Herramienta de línea
-                    with st.expander("Medir Distancia", expanded=False):
-                        st.write("Haz clic en 2 puntos para medir una distancia")
+                    # Calibración (función más avanzada, simplificada para esta versión)
+                    with st.expander("Calibración", expanded=False):
+                        st.write("Para una calibración básica, puedes usar un objeto de referencia de tamaño conocido.")
+                        ref_size = st.number_input("Tamaño de referencia (cm)", min_value=1, max_value=200, value=100)
+                        st.info("Dibuja una línea sobre un objeto de referencia conocido y utiliza esta medida para calibrar.")
+                    
+                    # Exportar frame actual
+                    if st.button("Exportar Frame Actual"):
+                        # Guardar el frame actual con las mediciones
+                        frame_with_measurements = st.session_state.current_frame.copy()
                         
-                        line_desc = st.text_input("Descripción", placeholder="Ej: Longitud de segmento", key="line_desc")
+                        # Aplicar mediciones
+                        for m in st.session_state.measurements:
+                            if m["frame_index"] == st.session_state.frame_index:
+                                if m["type"] == "Ángulo" and "points" in m and len(m["points"]) == 3:
+                                    draw_angle(frame_with_measurements, m["points"], m["value"], color=(255, 0, 0))
+                                elif m["type"] == "Línea" and "points" in m and len(m["points"]) == 2:
+                                    draw_line(frame_with_measurements, m["points"], m["value"], color=(0, 255, 0))
                         
-                        # Botón para activar la selección de puntos
-                        if st.button("Seleccionar Puntos (2)", key="select_line"):
-                            # Ejemplo de puntos para la línea
-                            p1 = (150, 250)
-                            p2 = (350, 250)
-                            
-                            points = [p1, p2]
-                            distance = calculate_distance(p1, p2)
-                            
-                            # Guardar medición
-                            measurement = save_measurement(
-                                "Línea", 
-                                distance, 
-                                line_desc or "Medición de distancia", 
-                                "N/A"
+                        # Guardar imagen temporalmente
+                        img_path = "temp/frame_export.jpg"
+                        cv2.imwrite(img_path, cv2.cvtColor(frame_with_measurements, cv2.COLOR_RGB2BGR))
+                        
+                        # Ofrecer para descargar
+                        with open(img_path, "rb") as file:
+                            btn = st.download_button(
+                                label="Descargar Imagen",
+                                data=file,
+                                file_name=f"frame_{st.session_state.frame_index}.jpg",
+                                mime="image/jpeg"
                             )
-                            
-                            # Añadir puntos a la medición para referencia
-                            measurement["points"] = points
-                            
-                            st.success(f"Distancia: {distance:.1f} px - Guardada!")
                 
                 # Mostrar mediciones del frame actual
                 st.subheader("Mediciones en este Frame")
