@@ -1,9 +1,8 @@
-streamlit==1.27.0
-opencv-python==4.8.1.78
+streamlit==1.31.0
+opencv-python-headless==4.8.1.78
 numpy==1.26.0
 pandas==2.1.1
 matplotlib==3.8.0
-pillow==10.0.1
+pillow==9.5.0
 reportlab==4.0.4
 plotly==5.17.0
-uuid==1.30
