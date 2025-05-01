@@ -7,3 +7,4 @@ pillow
 reportlab==4.0.4
 plotly==5.17.0
 streamlit-drawable-canvas==0.9.3
+kaleido
