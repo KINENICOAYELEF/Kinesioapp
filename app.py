@@ -19,16 +19,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 import math
-import uuid
+import uuid  # Usando el módulo uuid de la biblioteca estándar
 
 # Configuración de la página
 st.set_page_config(page_title="KinesioApp", page_icon="🏋️", layout="wide")
 
 # Crear directorios necesarios si no existen
-if not os.path.exists("temp"):
-    os.makedirs("temp")
-if not os.path.exists("data"):
-    os.makedirs("data")
+os.makedirs("temp", exist_ok=True)
+os.makedirs("data", exist_ok=True)
     
 # Archivo para almacenar datos de clientes
 CLIENTS_FILE = "data/clients.json"
