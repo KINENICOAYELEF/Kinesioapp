@@ -39,6 +39,8 @@ if 'factor_escala' not in st.session_state:
     st.session_state.factor_escala = 1.0  # 1 pixel = 1 unidad
 if 'unidad_medida' not in st.session_state:
     st.session_state.unidad_medida = "cm"  # Unidad de medida predeterminada
+if 'video_path' not in st.session_state:
+    st.session_state.video_path = None
 
 # Función para calcular la distancia entre dos puntos
 def calcular_distancia(p1, p2):
@@ -71,8 +73,32 @@ def calcular_angulo(p1, p2, p3):
     angle = math.degrees(math.acos(cos_angle))
     return angle
 
+# Función para cargar un frame específico del video
+def cargar_frame(video_path, frame_index):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    
+    # Establecer la posición del frame
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+    
+    # Leer el frame
+    ret, frame = cap.read()
+    
+    # Cerrar el video
+    cap.release()
+    
+    if ret:
+        # Convertir BGR a RGB
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    else:
+        return None
+
 # Función para dibujar puntos, líneas y ángulos en el frame
 def dibujar_elementos(frame):
+    if frame is None:
+        return np.zeros((400, 600, 3), dtype=np.uint8)  # Frame negro si no hay imagen
+        
     img = frame.copy()
     
     # Dibujar puntos
@@ -80,6 +106,28 @@ def dibujar_elementos(frame):
         cv2.circle(img, point, 5, (255, 0, 0), -1)
         cv2.putText(img, f"{i+1}", (point[0]+10, point[1]-10), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+    
+    # Dibujar líneas entre puntos consecutivos
+    if len(st.session_state.points) >= 2:
+        for i in range(len(st.session_state.points) - 1):
+            cv2.line(img, st.session_state.points[i], st.session_state.points[i+1], (0, 255, 0), 2)
+    
+    # Si hay 3 puntos, dibujar el ángulo
+    if len(st.session_state.points) >= 3:
+        p1, p2, p3 = st.session_state.points[0], st.session_state.points[1], st.session_state.points[2]
+        angulo = calcular_angulo(p1, p2, p3)
+        
+        # Dibujamos arco para visualizar el ángulo
+        radio = min(calcular_distancia(p1, p2), calcular_distancia(p3, p2)) // 3
+        cv2.ellipse(img, p2, (int(radio), int(radio)), 0, 
+                   math.atan2(p1[1]-p2[1], p1[0]-p2[0]) * 180 / math.pi,
+                   math.atan2(p3[1]-p2[1], p3[0]-p2[0]) * 180 / math.pi, 
+                   (255, 255, 0), 2)
+        
+        # Mostrar el valor del ángulo
+        text_pos = (p2[0] + int(radio * 1.5), p2[1])
+        cv2.putText(img, f"{angulo:.1f}°", text_pos, 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
     
     return img
 
@@ -167,35 +215,23 @@ with st.sidebar:
     
     if uploaded_file:
         # Guardar el archivo en un archivo temporal
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}")
-        temp_file.write(uploaded_file.read())
-        temp_file.close()
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.'+uploaded_file.name.split('.')[-1])
+        tfile.write(uploaded_file.read())
+        tfile_path = tfile.name
+        tfile.close()
         
         # Abrir el video con OpenCV
-        cap = cv2.VideoCapture(temp_file.name)
+        cap = cv2.VideoCapture(tfile_path)
         
         # Verificar que el video se ha cargado correctamente
         if not cap.isOpened():
             st.error("Error al abrir el archivo de video.")
         else:
-            # Leer los frames del video
-            st.session_state.frames = []
+            # Obtener información del video
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = cap.get(cv2.CAP_PROP_FPS)
             
-            # Crear una barra de progreso
-            progress_bar = st.progress(0)
-            
-            # Leer todos los frames
-            for i in range(total_frames):
-                ret, frame = cap.read()
-                if ret:
-                    # Convertir BGR a RGB
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    st.session_state.frames.append(frame_rgb)
-                progress_bar.progress((i + 1) / total_frames)
-            
-            # Guardar información del video
+            # Actualizar información del video
             st.session_state.video_info = {
                 "nombre": uploaded_file.name,
                 "fps": fps,
@@ -203,19 +239,18 @@ with st.sidebar:
                 "duracion": total_frames / fps if fps > 0 else 0
             }
             
-            # Reiniciar índice de frame
-            st.session_state.current_frame_idx = 0
-            st.session_state.points = []
-            
             # Mostrar información
             st.success(f"Video cargado: {uploaded_file.name}")
             st.info(f"Frames: {total_frames}, FPS: {fps:.2f}")
             
-            # Limpiar archivo temporal
-            os.unlink(temp_file.name)
-        
-        # Cerrar el video
-        cap.release()
+            # Reiniciar variables de sesión
+            st.session_state.current_frame_idx = 0
+            st.session_state.points = []
+            
+            # No intentamos cargar todos los frames a la vez (causa problemas de memoria)
+            # Solo guardamos la ruta del archivo de video
+            st.session_state.video_path = tfile_path
+            st.session_state.frames = [i for i in range(total_frames)]  # Solo creamos una lista de índices
     
     # Sección de navegación (si hay frames cargados)
     if st.session_state.frames:
@@ -342,68 +377,80 @@ with st.sidebar:
 if st.session_state.frames and len(st.session_state.frames) > 0:
     st.header(f"Frame {st.session_state.current_frame_idx + 1} de {len(st.session_state.frames)}")
     
-    # Preparar frame actual con anotaciones
-    current_frame = st.session_state.frames[st.session_state.current_frame_idx]
-    img_with_annotations = dibujar_elementos(current_frame)
-    
-    # Tamaño del canvas para dibujar
-    frame_height, frame_width = img_with_annotations.shape[:2]
-    
-    # Crear dos columnas para el área principal
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # Convertir la imagen OpenCV para el canvas
-        canvas_img = Image.fromarray(img_with_annotations)
+    # Cargar frame actual desde el archivo de video
+    if st.session_state.video_path:
+        current_frame = cargar_frame(st.session_state.video_path, st.session_state.current_frame_idx)
         
-        # Crear el canvas donde se pueden dibujar
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 165, 0, 0.3)",
-            stroke_width=2,
-            stroke_color="#FF0000",
-            background_image=canvas_img,
-            update_streamlit=True,
-            height=frame_height,
-            width=frame_width,
-            drawing_mode="point",
-            key=f"canvas_{st.session_state.current_frame_idx}",
-        )
-        
-        # Procesar nuevos puntos marcados
-        if canvas_result.json_data is not None and canvas_result.json_data["objects"]:
-            points_data = canvas_result.json_data["objects"]
-            new_points = []
+        # Si el frame se cargó correctamente
+        if current_frame is not None:
+            # Preparar frame actual con anotaciones
+            img_with_annotations = dibujar_elementos(current_frame)
             
-            # Extraer coordenadas de los puntos
-            for point in points_data:
-                if point["type"] == "circle":
-                    x = int(point["left"] + point["radius"])
-                    y = int(point["top"] + point["radius"])
-                    new_points.append((x, y))
+            # Tamaño del canvas para dibujar
+            frame_height, frame_width = img_with_annotations.shape[:2]
             
-            # Actualizar la lista de puntos
-            if new_points:
-                st.session_state.points = new_points
-                st.experimental_rerun()
-    
-    with col2:
-        # Mostrar las coordenadas de los puntos marcados
-        st.subheader("Puntos Marcados")
-        for i, point in enumerate(st.session_state.points):
-            st.write(f"Punto {i+1}: ({point[0]}, {point[1]})")
-        
-        # Mostrar mediciones para el frame actual
-        st.subheader("Mediciones en este Frame")
-        frame_measurements = st.session_state.measurements[st.session_state.measurements['Frame'] == st.session_state.current_frame_idx + 1]
-        
-        if not frame_measurements.empty:
-            for idx, row in frame_measurements.iterrows():
-                st.write(f"{row['Tipo']}: {row['Valor']:.2f} {st.session_state.unidad_medida if row['Tipo'] == 'Distancia' else '°'}")
-                if row['Descripción']:
-                    st.write(f"Descripción: {row['Descripción']}")
-                st.divider()
+            # Crear dos columnas para el área principal
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                # Mostrar la imagen del frame actual
+                st.image(img_with_annotations, caption=f"Frame {st.session_state.current_frame_idx + 1}", use_column_width=True)
+                
+                # Instrucciones para marcar puntos
+                st.write("Haz clic en la imagen para marcar puntos.")
+                
+                # Capturar clics en la imagen
+                result = st_canvas(
+                    fill_color="rgba(255, 165, 0, 0.3)",
+                    stroke_width=2,
+                    stroke_color="#FF0000",
+                    background_image=Image.fromarray(img_with_annotations),
+                    height=frame_height,
+                    width=frame_width,
+                    drawing_mode="point",
+                    key=f"canvas_{st.session_state.current_frame_idx}",
+                    point_display_radius=5,
+                )
+                
+                # Procesar nuevos puntos marcados
+                if result.json_data is not None and "objects" in result.json_data and result.json_data["objects"]:
+                    points_data = result.json_data["objects"]
+                    new_points = []
+                    
+                    # Extraer coordenadas de los puntos
+                    for point in points_data:
+                        if point["type"] == "circle":
+                            x = int(point["left"])
+                            y = int(point["top"])
+                            new_points.append((x, y))
+                    
+                    # Actualizar la lista de puntos
+                    if new_points and new_points != st.session_state.points:
+                        st.session_state.points = new_points
+                        st.experimental_rerun()
+            
+            with col2:
+                # Mostrar las coordenadas de los puntos marcados
+                st.subheader("Puntos Marcados")
+                for i, point in enumerate(st.session_state.points):
+                    st.write(f"Punto {i+1}: ({point[0]}, {point[1]})")
+                
+                # Mostrar mediciones para el frame actual
+                st.subheader("Mediciones en este Frame")
+                frame_measurements = st.session_state.measurements[st.session_state.measurements['Frame'] == st.session_state.current_frame_idx + 1]
+                
+                if not frame_measurements.empty:
+                    for idx, row in frame_measurements.iterrows():
+                        st.write(f"{row['Tipo']}: {row['Valor']:.2f} {st.session_state.unidad_medida if row['Tipo'] == 'Distancia' else '°'}")
+                        if row['Descripción']:
+                            st.write(f"Descripción: {row['Descripción']}")
+                        st.divider()
+                else:
+                    st.info("No hay mediciones para este frame")
         else:
-            st.info("No hay mediciones para este frame")
+            st.error("No se pudo cargar el frame actual. Puede haber un problema con el formato del video.")
+    else:
+        st.error("No se ha cargado un video correctamente.")
 
 else:
     st.write("Cargue un video para comenzar el análisis biomecánico.")
