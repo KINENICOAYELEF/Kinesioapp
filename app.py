@@ -8,9 +8,7 @@ import os
 import datetime
 from PIL import Image
 import io
-from matplotlib.patches import Rectangle
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as ReportLabImage, Table, TableStyle
@@ -20,7 +18,7 @@ import plotly.graph_objects as go
 import json
 import math
 import uuid
-import mediapipe as mp
+from streamlit_drawable_canvas import st_canvas
 
 # Configuración de la página
 st.set_page_config(page_title="KinesioApp", page_icon="🏋️", layout="wide")
@@ -32,11 +30,6 @@ os.makedirs("data", exist_ok=True)
 # Archivo para almacenar datos de clientes
 CLIENTS_FILE = "data/clients.json"
 SESSIONS_FILE = "data/sessions.json"
-
-# Inicializar modelos de MediaPipe para detección de pose
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-mp_drawing_styles = mp.solutions.drawing_styles
 
 # CSS personalizado para mejorar la apariencia
 st.markdown("""
@@ -283,85 +276,46 @@ st.markdown("""
         background-color: rgba(52, 152, 219, 0.1);
     }
     
-    /* Arreglo para que el canvas se muestre correctamente */
-    [data-testid="stImage"] {
-        display: block !important;
-        max-width: 100% !important;
-    }
-    
     .canvas-container {
         margin: 0 auto;
         max-width: 100%;
         overflow: hidden;
+        background-color: rgba(255,255,255,0.8);
     }
     
-    .biomech-tool {
-        background-color: #ecf0f1;
-        padding: 10px;
+    /* Ajustar color de trazos según tipo */
+    .angle-stroke {
+        stroke: #e74c3c !important;
+    }
+    
+    .line-stroke {
+        stroke: #2ecc71 !important;
+    }
+    
+    .force-stroke {
+        stroke: #9b59b6 !important;
+    }
+    
+    /* Arreglar tamaño de canvas */
+    .canvas-container {
+        max-width: 100% !important;
+        width: 100% !important;
+    }
+    
+    /* Instrucciones para dibujo */
+    .drawing-instructions {
+        background-color: #eaf7fb;
+        padding: 10px 15px;
         border-radius: 8px;
         margin-bottom: 10px;
         border-left: 3px solid #3498db;
     }
     
-    .force-vector {
-        color: #e74c3c;
-        font-weight: bold;
-    }
-    
-    .leverage-arm {
-        color: #9b59b6;
-        font-weight: bold;
-    }
-    
-    .moment-arm {
-        color: #f39c12;
-        font-weight: bold;
-    }
-    
-    .detection-panel {
+    .tool-selector {
+        border-radius: 8px;
+        padding: 10px;
         background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid #3498db;
-        margin-bottom: 20px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    }
-    
-    .analysis-result {
-        background-color: #e8f4fd;
-        padding: 12px;
-        border-radius: 8px;
-        margin: 10px 0;
-        border-left: 4px solid #2ecc71;
-    }
-    
-    .result-value {
-        font-weight: bold;
-        color: #2c3e50;
-        font-size: 1.1em;
-    }
-    
-    .segment-name {
-        color: #3498db;
-        font-weight: 600;
-    }
-    
-    .angle-name {
-        color: #e74c3c;
-        font-weight: 600;
-    }
-    
-    .moment-name {
-        color: #9b59b6;
-        font-weight: 600;
-    }
-    
-    .ai-button {
-        background-color: #9b59b6 !important;
-    }
-    
-    .ai-button:hover {
-        background-color: #8e44ad !important;
+        margin-bottom: 15px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -414,57 +368,31 @@ if "total_frames" not in st.session_state:
     st.session_state.total_frames = 0
 if "measurements" not in st.session_state:
     st.session_state.measurements = []
-if "pose_landmarks" not in st.session_state:
-    st.session_state.pose_landmarks = None
+if "drawing_mode" not in st.session_state:
+    st.session_state.drawing_mode = "line"
+if "stroke_width" not in st.session_state:
+    st.session_state.stroke_width = 3
+if "stroke_color" not in st.session_state:
+    st.session_state.stroke_color = "#00FF00"
 if "calibration_factor" not in st.session_state:
     st.session_state.calibration_factor = 1.0  # Píxeles por cm
-if "angle_measurements" not in st.session_state:
-    st.session_state.angle_measurements = []
-if "limb_measurements" not in st.session_state:
-    st.session_state.limb_measurements = []
+if "tool_type" not in st.session_state:
+    st.session_state.tool_type = "angle"  # angle, line, force, moment
+if "joint_type" not in st.session_state:
+    st.session_state.joint_type = "Rodilla"
+if "last_canvas_output" not in st.session_state:
+    st.session_state.last_canvas_output = None
+if "pivots" not in st.session_state:
+    st.session_state.pivots = []
 if "force_vectors" not in st.session_state:
     st.session_state.force_vectors = []
 if "moment_arms" not in st.session_state:
     st.session_state.moment_arms = []
-if "analyze_with_ai" not in st.session_state:
-    st.session_state.analyze_with_ai = False
-
-# Definición de puntos de referencia para ángulos comunes
-LANDMARK_DICT = {
-    "Tobillo Derecho": [mp_pose.PoseLandmark.RIGHT_ANKLE, mp_pose.PoseLandmark.RIGHT_KNEE, mp_pose.PoseLandmark.RIGHT_HEEL],
-    "Tobillo Izquierdo": [mp_pose.PoseLandmark.LEFT_ANKLE, mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.LEFT_HEEL],
-    "Rodilla Derecha": [mp_pose.PoseLandmark.RIGHT_HIP, mp_pose.PoseLandmark.RIGHT_KNEE, mp_pose.PoseLandmark.RIGHT_ANKLE],
-    "Rodilla Izquierda": [mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.LEFT_ANKLE],
-    "Cadera Derecha": [mp_pose.PoseLandmark.RIGHT_SHOULDER, mp_pose.PoseLandmark.RIGHT_HIP, mp_pose.PoseLandmark.RIGHT_KNEE],
-    "Cadera Izquierda": [mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.LEFT_KNEE],
-    "Codo Derecho": [mp_pose.PoseLandmark.RIGHT_SHOULDER, mp_pose.PoseLandmark.RIGHT_ELBOW, mp_pose.PoseLandmark.RIGHT_WRIST],
-    "Codo Izquierdo": [mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_ELBOW, mp_pose.PoseLandmark.LEFT_WRIST],
-    "Hombro Derecho": [mp_pose.PoseLandmark.RIGHT_ELBOW, mp_pose.PoseLandmark.RIGHT_SHOULDER, mp_pose.PoseLandmark.RIGHT_HIP],
-    "Hombro Izquierdo": [mp_pose.PoseLandmark.LEFT_ELBOW, mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_HIP],
-    "Tronco": [mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.LEFT_KNEE]
-}
-
-# Definición de segmentos corporales
-SEGMENT_DICT = {
-    "Antebrazo Derecho": [mp_pose.PoseLandmark.RIGHT_ELBOW, mp_pose.PoseLandmark.RIGHT_WRIST],
-    "Antebrazo Izquierdo": [mp_pose.PoseLandmark.LEFT_ELBOW, mp_pose.PoseLandmark.LEFT_WRIST],
-    "Brazo Derecho": [mp_pose.PoseLandmark.RIGHT_SHOULDER, mp_pose.PoseLandmark.RIGHT_ELBOW],
-    "Brazo Izquierdo": [mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_ELBOW],
-    "Muslo Derecho": [mp_pose.PoseLandmark.RIGHT_HIP, mp_pose.PoseLandmark.RIGHT_KNEE],
-    "Muslo Izquierdo": [mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.LEFT_KNEE],
-    "Pierna Derecha": [mp_pose.PoseLandmark.RIGHT_KNEE, mp_pose.PoseLandmark.RIGHT_ANKLE],
-    "Pierna Izquierda": [mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.LEFT_ANKLE],
-    "Tronco": [mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.LEFT_HIP]
-}
 
 # Funciones para el análisis de video
 def process_video(video_file):
     """Procesa un video y lo almacena temporalmente"""
     try:
-        # Directorio temporal
-        if not os.path.exists("temp"):
-            os.makedirs("temp")
-            
         # Guardar el video temporalmente
         temp_file_path = os.path.join("temp", f"temp_video_{uuid.uuid4()}.mp4")
         with open(temp_file_path, "wb") as f:
@@ -484,12 +412,6 @@ def process_video(video_file):
             st.error("El video no tiene frames válidos.")
             return False
         
-        # Obtener primer frame para verificar
-        ret, frame = cap.read()
-        if not ret:
-            st.error("No se pudo leer el primer frame del video.")
-            return False
-            
         # Actualizar el estado
         st.session_state.current_video_path = temp_file_path
         st.session_state.total_frames = total_frames
@@ -531,13 +453,6 @@ def get_frame(frame_index):
                 # Convertir de BGR a RGB
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 st.session_state.current_frame = frame_rgb
-                
-                # Si la opción de análisis con IA está activada, detectar automáticamente
-                if st.session_state.analyze_with_ai:
-                    detect_pose(frame_rgb)
-                else:
-                    st.session_state.pose_landmarks = None
-                    
                 return True
             else:
                 st.error(f"No se pudo leer el frame {frame_index} del video.")
@@ -549,57 +464,15 @@ def get_frame(frame_index):
         st.error(f"Error al obtener el frame: {str(e)}")
         return False
 
-def detect_pose(frame):
-    """Detecta los puntos de referencia de la pose usando MediaPipe"""
-    try:
-        with mp_pose.Pose(
-                static_image_mode=True,
-                model_complexity=2,
-                enable_segmentation=False,
-                min_detection_confidence=0.5) as pose:
-            
-            results = pose.process(frame)
-            
-            if results.pose_landmarks:
-                st.session_state.pose_landmarks = results.pose_landmarks
-                return True
-            else:
-                st.session_state.pose_landmarks = None
-                return False
-    except Exception as e:
-        st.error(f"Error en la detección de pose: {str(e)}")
-        st.session_state.pose_landmarks = None
-        return False
-
-def get_landmark_coordinates(landmark_index):
-    """Obtiene las coordenadas normalizadas de un punto de referencia"""
-    if st.session_state.pose_landmarks is None:
-        return None
-    
-    landmark = st.session_state.pose_landmarks.landmark[landmark_index]
-    
-    # Convertir de coordenadas normalizadas a coordenadas de píxeles
-    x = int(landmark.x * st.session_state.frame_width)
-    y = int(landmark.y * st.session_state.frame_height)
-    
-    # Comprobar visibilidad
-    if landmark.visibility < 0.5:  # Umbral de visibilidad
-        return None
-        
-    return (x, y)
-
 def calculate_angle(p1, p2, p3):
     """Calcula el ángulo entre tres puntos (en grados)"""
-    if p1 is None or p2 is None or p3 is None:
-        return None
-        
     # Vectores
     a = np.array([p1[0] - p2[0], p1[1] - p2[1]])
     b = np.array([p3[0] - p2[0], p3[1] - p2[1]])
     
     # Verificar vectores no nulos
     if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
-        return None
+        return 0
     
     # Calcular el ángulo
     cos_angle = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -609,18 +482,12 @@ def calculate_angle(p1, p2, p3):
 
 def calculate_distance(p1, p2):
     """Calcula la distancia entre dos puntos"""
-    if p1 is None or p2 is None:
-        return None
-        
-    return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p2[1])**2)
+    return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
 
 def calculate_moment_arm(pivot_point, force_line_p1, force_line_p2):
     """
     Calcula el brazo de momento (distancia perpendicular desde el punto de pivote a la línea de fuerza)
     """
-    if pivot_point is None or force_line_p1 is None or force_line_p2 is None:
-        return None
-        
     # Vectorizar para facilitar cálculos
     pivot = np.array(pivot_point)
     p1 = np.array(force_line_p1)
@@ -632,7 +499,7 @@ def calculate_moment_arm(pivot_point, force_line_p1, force_line_p2):
     
     # Evitar división por cero
     if force_direction_norm == 0:
-        return None
+        return 0
     
     # Normalizar vector de dirección
     force_direction = force_direction / force_direction_norm
@@ -649,98 +516,56 @@ def calculate_moment_arm(pivot_point, force_line_p1, force_line_p2):
     # Distancia perpendicular (brazo de momento)
     moment_arm = np.linalg.norm(pivot - closest_point)
     
-    return moment_arm
+    return moment_arm, tuple(map(int, closest_point))
 
-def get_key_body_landmarks():
-    """Obtiene los puntos clave del cuerpo para análisis biomecánico"""
-    if st.session_state.pose_landmarks is None:
+def process_canvas_result(canvas_result, drawing_mode, joint="", description=""):
+    """Procesa el resultado del canvas para extraer mediciones"""
+    if not canvas_result or not canvas_result.json_data or "objects" not in canvas_result.json_data:
         return None
     
-    landmarks = {}
-    
-    # Articulaciones principales
-    key_joints = {
-        "Hombro Der": mp_pose.PoseLandmark.RIGHT_SHOULDER,
-        "Hombro Izq": mp_pose.PoseLandmark.LEFT_SHOULDER,
-        "Codo Der": mp_pose.PoseLandmark.RIGHT_ELBOW,
-        "Codo Izq": mp_pose.PoseLandmark.LEFT_ELBOW,
-        "Muñeca Der": mp_pose.PoseLandmark.RIGHT_WRIST,
-        "Muñeca Izq": mp_pose.PoseLandmark.LEFT_WRIST,
-        "Cadera Der": mp_pose.PoseLandmark.RIGHT_HIP,
-        "Cadera Izq": mp_pose.PoseLandmark.LEFT_HIP,
-        "Rodilla Der": mp_pose.PoseLandmark.RIGHT_KNEE,
-        "Rodilla Izq": mp_pose.PoseLandmark.LEFT_KNEE,
-        "Tobillo Der": mp_pose.PoseLandmark.RIGHT_ANKLE,
-        "Tobillo Izq": mp_pose.PoseLandmark.LEFT_ANKLE
-    }
-    
-    for name, landmark_id in key_joints.items():
-        landmarks[name] = get_landmark_coordinates(landmark_id)
+    objects = canvas_result.json_data["objects"]
+    if not objects:
+        return None
         
-    return landmarks
-
-def draw_landmark_connections(frame):
-    """Dibuja las conexiones entre puntos de referencia en el frame"""
-    if frame is None or st.session_state.pose_landmarks is None:
-        return frame
-    
-    annotated_frame = frame.copy()
-    
-    # Dibujar puntos y conexiones
-    mp_drawing.draw_landmarks(
-        annotated_frame,
-        st.session_state.pose_landmarks,
-        mp_pose.POSE_CONNECTIONS,
-        landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style()
-    )
-    
-    return annotated_frame
-
-def analyze_all_angles():
-    """Analiza todos los ángulos articulares predefinidos"""
-    if st.session_state.pose_landmarks is None:
-        return []
-    
-    angle_results = []
-    
-    for angle_name, landmarks in LANDMARK_DICT.items():
-        p1 = get_landmark_coordinates(landmarks[0])
-        p2 = get_landmark_coordinates(landmarks[1])
-        p3 = get_landmark_coordinates(landmarks[2])
-        
-        if p1 and p2 and p3:
-            angle = calculate_angle(p1, p2, p3)
-            if angle is not None:
-                # Guardar medición
+    if drawing_mode == "circle":
+        # Para ángulos necesitamos 3 puntos (círculos)
+        if len(objects) >= 3:
+            angle_points = []
+            for i in range(-3, 0):
+                if i + len(objects) >= 0:  # Asegurarse de que el índice es válido
+                    obj = objects[i + len(objects)]
+                    if "left" in obj and "top" in obj and "radius" in obj:
+                        # Calcular el centro del círculo
+                        center_x = int(obj["left"] + obj["radius"])
+                        center_y = int(obj["top"] + obj["radius"])
+                        angle_points.append((center_x, center_y))
+            
+            if len(angle_points) == 3:
+                angle = calculate_angle(angle_points[0], angle_points[1], angle_points[2])
+                
                 measurement = {
                     "id": str(uuid.uuid4()),
                     "type": "Ángulo",
-                    "joint": angle_name,
                     "value": angle,
-                    "points": [p1, p2, p3],
+                    "description": description or f"Ángulo en {joint}",
+                    "joint": joint,
+                    "points": angle_points,
                     "frame_index": st.session_state.frame_index,
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "description": f"Ángulo de {angle_name}"
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
-                angle_results.append(measurement)
+                
+                return measurement
     
-    return angle_results
-
-def analyze_all_segments():
-    """Analiza todos los segmentos corporales predefinidos"""
-    if st.session_state.pose_landmarks is None:
-        return []
-    
-    segment_results = []
-    
-    for segment_name, landmarks in SEGMENT_DICT.items():
-        p1 = get_landmark_coordinates(landmarks[0])
-        p2 = get_landmark_coordinates(landmarks[1])
-        
-        if p1 and p2:
-            distance = calculate_distance(p1, p2)
-            if distance is not None:
-                # Convertir a cm si hay calibración
+    elif drawing_mode == "line":
+        # Para líneas buscamos el último objeto tipo línea
+        for obj in reversed(objects):
+            if "x1" in obj and "x2" in obj:
+                p1 = (int(obj["x1"]), int(obj["y1"]))
+                p2 = (int(obj["x2"]), int(obj["y2"]))
+                
+                distance = calculate_distance(p1, p2)
+                
+                # Convertir a unidades reales si hay calibración
                 if st.session_state.calibration_factor != 1.0:
                     real_distance = distance / st.session_state.calibration_factor
                     unit = "cm"
@@ -748,137 +573,120 @@ def analyze_all_segments():
                     real_distance = distance
                     unit = "px"
                 
-                # Guardar medición
                 measurement = {
                     "id": str(uuid.uuid4()),
                     "type": "Línea",
-                    "joint": segment_name,
                     "value": distance,
                     "real_value": real_distance,
                     "unit": unit,
+                    "description": description or "Medición de distancia",
+                    "joint": joint,
                     "points": [p1, p2],
                     "frame_index": st.session_state.frame_index,
-                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "description": f"Longitud de {segment_name}"
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
-                segment_results.append(measurement)
+                
+                return measurement
     
-    return segment_results
+    elif drawing_mode == "arrow":
+        # Para vectores de fuerza buscamos el último objeto tipo línea/flecha
+        for obj in reversed(objects):
+            if "x1" in obj and "x2" in obj:
+                p1 = (int(obj["x1"]), int(obj["y1"]))
+                p2 = (int(obj["x2"]), int(obj["y2"]))
+                
+                magnitude = calculate_distance(p1, p2)
+                
+                # Convertir a unidades reales si hay calibración
+                if st.session_state.calibration_factor != 1.0:
+                    real_magnitude = magnitude / st.session_state.calibration_factor
+                    unit = "cm"
+                else:
+                    real_magnitude = magnitude
+                    unit = "px"
+                
+                vector = {
+                    "id": str(uuid.uuid4()),
+                    "type": "Vector de Fuerza",
+                    "points": [p1, p2],
+                    "magnitude": magnitude,
+                    "real_magnitude": real_magnitude,
+                    "unit": unit,
+                    "description": description or "Vector de fuerza",
+                    "frame_index": st.session_state.frame_index,
+                    "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                return vector
+                
+    return None
 
-def analyze_gravity_moments():
-    """Analiza los momentos de fuerza producidos por la gravedad"""
-    if st.session_state.pose_landmarks is None:
-        return []
+def process_pivot_selection(canvas_result, description=""):
+    """Procesa la selección de un punto de pivote (articulación)"""
+    if not canvas_result or not canvas_result.json_data or "objects" not in canvas_result.json_data:
+        return None
     
-    moment_results = []
+    objects = canvas_result.json_data["objects"]
+    if not objects:
+        return None
     
-    # Definir articulaciones de pivote y segmentos para análisis de momento
-    moment_analyses = [
-        {
-            "name": "Momento Flexión Codo Der",
-            "pivot": mp_pose.PoseLandmark.RIGHT_ELBOW,
-            "com": [mp_pose.PoseLandmark.RIGHT_ELBOW, mp_pose.PoseLandmark.RIGHT_WRIST],  # Centro de masa aproximado
-            "force_dir": [0, 1]  # Dirección hacia abajo (gravedad)
-        },
-        {
-            "name": "Momento Flexión Codo Izq",
-            "pivot": mp_pose.PoseLandmark.LEFT_ELBOW,
-            "com": [mp_pose.PoseLandmark.LEFT_ELBOW, mp_pose.PoseLandmark.LEFT_WRIST],
-            "force_dir": [0, 1]
-        },
-        {
-            "name": "Momento Flexión Rodilla Der",
-            "pivot": mp_pose.PoseLandmark.RIGHT_KNEE,
-            "com": [mp_pose.PoseLandmark.RIGHT_KNEE, mp_pose.PoseLandmark.RIGHT_ANKLE],
-            "force_dir": [0, 1]
-        },
-        {
-            "name": "Momento Flexión Rodilla Izq",
-            "pivot": mp_pose.PoseLandmark.LEFT_KNEE,
-            "com": [mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.LEFT_ANKLE],
-            "force_dir": [0, 1]
-        },
-        {
-            "name": "Momento Flexión Cadera Der",
-            "pivot": mp_pose.PoseLandmark.RIGHT_HIP,
-            "com": [mp_pose.PoseLandmark.RIGHT_HIP, mp_pose.PoseLandmark.RIGHT_KNEE],
-            "force_dir": [0, 1]
-        },
-        {
-            "name": "Momento Flexión Cadera Izq",
-            "pivot": mp_pose.PoseLandmark.LEFT_HIP,
-            "com": [mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.LEFT_KNEE],
-            "force_dir": [0, 1]
-        }
-    ]
-    
-    for analysis in moment_analyses:
-        # Obtener punto de pivote
-        pivot = get_landmark_coordinates(analysis["pivot"])
-        
-        if pivot:
-            # Obtener punto aproximado del centro de masa (punto medio del segmento como aproximación)
-            p1 = get_landmark_coordinates(analysis["com"][0])
-            p2 = get_landmark_coordinates(analysis["com"][1])
+    # Buscamos el último círculo dibujado (punto de pivote)
+    for obj in reversed(objects):
+        if "type" in obj and obj["type"] == "circle":
+            center_x = int(obj["left"] + obj["radius"])
+            center_y = int(obj["top"] + obj["radius"])
+            pivot_point = (center_x, center_y)
             
-            if p1 and p2:
-                com_x = (p1[0] + p2[0]) // 2
-                com_y = (p1[1] + p2[1]) // 2
-                com = (com_x, com_y)
-                
-                # Crear un segundo punto para la línea de fuerza (siguiendo la dirección de la gravedad)
-                force_x = com[0] + analysis["force_dir"][0] * 100  # Extender 100px
-                force_y = com[1] + analysis["force_dir"][1] * 100
-                force_end = (force_x, force_y)
-                
-                # Calcular el brazo de momento
-                moment_arm_value = calculate_moment_arm(pivot, com, force_end)
-                
-                if moment_arm_value is not None:
-                    # Convertir a cm si hay calibración
-                    if st.session_state.calibration_factor != 1.0:
-                        real_value = moment_arm_value / st.session_state.calibration_factor
-                        unit = "cm"
-                    else:
-                        real_value = moment_arm_value
-                        unit = "px"
-                    
-                    # Crear vector de fuerza
-                    force_vector = {
-                        "id": str(uuid.uuid4()),
-                        "type": "Vector de Fuerza",
-                        "points": [com, force_end],
-                        "description": f"Gravedad en {analysis['name']}",
-                        "frame_index": st.session_state.frame_index,
-                        "magnitude": calculate_distance(com, force_end),
-                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    
-                    # Crear medición de brazo de momento
-                    moment = {
-                        "id": str(uuid.uuid4()),
-                        "type": "Brazo de Momento",
-                        "joint": analysis["name"],
-                        "value": moment_arm_value,
-                        "real_value": real_value,
-                        "unit": unit,
-                        "pivot": pivot,
-                        "force_vector_id": force_vector["id"],
-                        "force_vector": force_vector,  # Incluir el vector para facilitar el dibujo
-                        "frame_index": st.session_state.frame_index,
-                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "description": analysis["name"]
-                    }
-                    
-                    moment_results.append(moment)
+            pivot = {
+                "id": str(uuid.uuid4()),
+                "type": "Pivote",
+                "point": pivot_point,
+                "description": description or "Punto de pivote",
+                "frame_index": st.session_state.frame_index,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            return pivot
+            
+    return None
+
+def process_moment_arm(pivot, force_vector, description=""):
+    """Calcula el brazo de momento entre un pivote y un vector de fuerza"""
+    if not pivot or not force_vector:
+        return None
     
-    return moment_results
+    p1, p2 = force_vector["points"]
+    pivot_point = pivot["point"]
+    
+    # Calcular brazo de momento
+    moment_value, perpendicular_point = calculate_moment_arm(pivot_point, p1, p2)
+    
+    # Convertir a unidades reales si hay calibración
+    if st.session_state.calibration_factor != 1.0:
+        real_value = moment_value / st.session_state.calibration_factor
+        unit = "cm"
+    else:
+        real_value = moment_value
+        unit = "px"
+    
+    moment_arm = {
+        "id": str(uuid.uuid4()),
+        "type": "Brazo de Momento",
+        "value": moment_value,
+        "real_value": real_value,
+        "unit": unit,
+        "pivot": pivot_point,
+        "perpendicular_point": perpendicular_point,
+        "force_vector_id": force_vector["id"],
+        "description": description or "Brazo de momento",
+        "frame_index": st.session_state.frame_index,
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    return moment_arm
 
 def draw_angle(frame, points, angle, color=(255, 0, 0)):
     """Dibuja un ángulo en el frame"""
-    if frame is None or not all(p is not None for p in points):
-        return frame
-        
     # Dibujar líneas
     cv2.line(frame, (points[0][0], points[0][1]), (points[1][0], points[1][1]), color, 2)
     cv2.line(frame, (points[1][0], points[1][1]), (points[2][0], points[2][1]), color, 2)
@@ -895,9 +703,6 @@ def draw_angle(frame, points, angle, color=(255, 0, 0)):
 
 def draw_line(frame, points, distance, color=(0, 255, 0), unit="px"):
     """Dibuja una línea con su longitud en el frame"""
-    if frame is None or not all(p is not None for p in points):
-        return frame
-        
     # Dibujar línea
     cv2.line(frame, (points[0][0], points[0][1]), (points[1][0], points[1][1]), color, 2)
     
@@ -914,13 +719,14 @@ def draw_line(frame, points, distance, color=(0, 255, 0), unit="px"):
     
     return frame
 
-def draw_force_vector(frame, points, description="", color=(255, 0, 0)):
+def draw_force_vector(frame, points, description="", color=(148, 0, 211)):
     """Dibuja un vector de fuerza con flecha en el frame"""
-    if frame is None or not all(p is not None for p in points):
-        return frame
-        
     # Dibujar flecha
     cv2.arrowedLine(frame, points[0], points[1], color, 2, tipLength=0.2)
+    
+    # Mostrar puntos
+    cv2.circle(frame, points[0], 5, color, -1)
+    cv2.circle(frame, points[1], 5, color, -1)
     
     # Mostrar la descripción
     text_pos = (points[1][0] + 10, points[1][1] + 10)
@@ -928,107 +734,30 @@ def draw_force_vector(frame, points, description="", color=(255, 0, 0)):
     
     return frame
 
-def draw_moment_arm(frame, pivot, force_vector, moment_value, color=(148, 0, 211), unit="px"):
+def draw_moment_arm(frame, pivot, perp_point, moment_value, color=(231, 76, 60), unit="px"):
     """Dibuja el brazo de momento (distancia perpendicular) en el frame"""
-    if frame is None or pivot is None or force_vector is None:
-        return frame
-    
-    # Extraer puntos
-    if isinstance(force_vector, dict) and "points" in force_vector:
-        force_p1, force_p2 = force_vector["points"]
-    else:
-        return frame
-    
-    # Vectorizar para facilitar cálculos
-    pivot_np = np.array(pivot)
-    p1 = np.array(force_p1)
-    p2 = np.array(force_p2)
-    
-    # Vector de dirección de la línea de fuerza
-    force_direction = p2 - p1
-    force_direction_norm = np.linalg.norm(force_direction)
-    
-    # Evitar división por cero
-    if force_direction_norm == 0:
-        return frame
-    
-    # Normalizar vector de dirección
-    force_direction = force_direction / force_direction_norm
-    
-    # Vector desde un punto de la línea al pivote
-    pivot_to_line = pivot_np - p1
-    
-    # Proyección escalar del vector pivot_to_line sobre force_direction
-    projection = np.dot(pivot_to_line, force_direction)
-    
-    # Punto más cercano en la línea de fuerza al pivote
-    closest_point = p1 + projection * force_direction
-    closest_point_tuple = (int(closest_point[0]), int(closest_point[1]))
-    
     # Dibujar línea del brazo de momento
-    cv2.line(frame, pivot, closest_point_tuple, color, 2, cv2.LINE_AA)
+    cv2.line(frame, pivot, perp_point, color, 2, cv2.LINE_AA)
     
     # Mostrar puntos
     cv2.circle(frame, pivot, 5, color, -1)
-    cv2.circle(frame, closest_point_tuple, 5, color, -1)
+    cv2.circle(frame, perp_point, 5, color, -1)
     
     # Mostrar el valor
-    mid_x = (pivot[0] + closest_point_tuple[0]) // 2
-    mid_y = (pivot[1] + closest_point_tuple[1]) // 2
+    mid_x = (pivot[0] + perp_point[0]) // 2
+    mid_y = (pivot[1] + perp_point[1]) // 2
     text_pos = (mid_x + 5, mid_y - 5)
     
     cv2.putText(frame, f"BM: {moment_value:.1f} {unit}", text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
     
     return frame
 
-def save_measurements(measurements):
-    """Guarda las mediciones en el estado de la sesión"""
-    for m in measurements:
-        if m["type"] == "Ángulo":
-            st.session_state.angle_measurements.append(m)
-        elif m["type"] == "Línea":
-            st.session_state.limb_measurements.append(m)
-        elif m["type"] == "Brazo de Momento":
-            # Guardar el vector de fuerza asociado
-            if "force_vector" in m:
-                st.session_state.force_vectors.append(m["force_vector"])
-            st.session_state.moment_arms.append(m)
-
-def save_session_data(client, form_data):
-    """Guarda los datos de la sesión"""
-    # Recopilar todas las mediciones
-    all_measurements = []
-    all_measurements.extend(st.session_state.angle_measurements)
-    all_measurements.extend(st.session_state.limb_measurements)
-    all_measurements.extend(st.session_state.force_vectors)
-    all_measurements.extend(st.session_state.moment_arms)
+def draw_pivot(frame, point, color=(255, 255, 0)):
+    """Dibuja un punto de pivote con un círculo destacado"""
+    cv2.circle(frame, point, 8, color, -1)
+    cv2.circle(frame, point, 12, color, 2)
     
-    # Crear datos de la sesión
-    session_data = {
-        "id": str(uuid.uuid4()),
-        "client_id": client["id"],
-        "date": form_data.get("date", datetime.date.today().strftime("%Y-%m-%d")),
-        "exercise": form_data.get("exercise", ""),
-        "sets": form_data.get("sets", 0),
-        "reps": form_data.get("reps", 0),
-        "rir": form_data.get("rir", 0),
-        "comments": form_data.get("comments", ""),
-        "measurements": all_measurements,
-        "video_name": st.session_state.current_video,
-        "calibration_factor": st.session_state.calibration_factor,
-        "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    
-    # Cargar sesiones existentes
-    sessions = load_sessions()
-    
-    # Añadir la nueva sesión
-    sessions.append(session_data)
-    
-    # Guardar en archivo
-    save_sessions(sessions)
-    
-    return True
+    return frame
 
 def get_time_from_frame(frame_index, fps=30):
     """Convierte un índice de frame a tiempo (minutos:segundos)"""
@@ -1070,6 +799,25 @@ def generate_pdf(client, session_data, measurements, frame_with_analysis, progre
     elements.append(rir_text)
     elements.append(Spacer(1, 12))
     
+    # Datos del cliente
+    client_title = Paragraph("Datos del Cliente", subtitle_style)
+    elements.append(client_title)
+    elements.append(Spacer(1, 6))
+    
+    client_info = [
+        f"<b>Nombre:</b> {client['name']}",
+        f"<b>Edad:</b> {client['age']} años",
+        f"<b>Género:</b> {client['gender']}",
+        f"<b>Altura:</b> {client['height']} cm",
+        f"<b>Peso:</b> {client['weight']} kg",
+        f"<b>Objetivo:</b> {client['goal']}"
+    ]
+    
+    for info in client_info:
+        elements.append(Paragraph(info, normal_style))
+    
+    elements.append(Spacer(1, 12))
+    
     # Análisis de movimiento
     movement_title = Paragraph("Análisis de Movimiento", subtitle_style)
     elements.append(movement_title)
@@ -1099,24 +847,24 @@ def generate_pdf(client, session_data, measurements, frame_with_analysis, progre
             if m["type"] == "Ángulo":
                 value_text = f"{m['value']:.1f}°"
             elif m["type"] == "Línea":
-                unit = m.get("unit", "px")
-                if "real_value" in m:
-                    value_text = f"{m['real_value']:.1f} {unit}"
+                if "real_value" in m and "unit" in m:
+                    value_text = f"{m['real_value']:.1f} {m['unit']}"
                 else:
-                    value_text = f"{m['value']:.1f} {unit}"
+                    value_text = f"{m['value']:.1f} px"
             elif m["type"] == "Vector de Fuerza":
-                if "magnitude" in m:
-                    value_text = f"{m['magnitude']:.1f} px"
-            elif m["type"] == "Brazo de Momento":
-                unit = m.get("unit", "px")
-                if "real_value" in m:
-                    value_text = f"{m['real_value']:.1f} {unit}"
+                if "real_magnitude" in m and "unit" in m:
+                    value_text = f"{m['real_magnitude']:.1f} {m['unit']}"
                 else:
-                    value_text = f"{m['value']:.1f} {unit}"
+                    value_text = f"{m.get('magnitude', 0):.1f} px"
+            elif m["type"] == "Brazo de Momento":
+                if "real_value" in m and "unit" in m:
+                    value_text = f"{m['real_value']:.1f} {m['unit']}"
+                else:
+                    value_text = f"{m['value']:.1f} px"
             
             data.append([
                 m["type"],
-                m.get("joint", m.get("description", "")),
+                m.get("joint", ""),
                 value_text,
                 m.get("description", "")
             ])
@@ -1170,7 +918,7 @@ def generate_pdf(client, session_data, measurements, frame_with_analysis, progre
 # Interfaz de usuario con Streamlit
 def main():
     # Aplicamos título con mejor formato
-    st.markdown("<h1 class='title'>🏋️ KinesioApp - Análisis Biomecánico Automático</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='title'>🏋️ KinesioApp - Análisis Biomecánico</h1>", unsafe_allow_html=True)
     
     # Pestañas de navegación
     tab1, tab2, tab3, tab4 = st.tabs(["📋 Clientes", "📹 Análisis de Video", "📊 Visualización de Datos", "📑 Informes"])
@@ -1320,8 +1068,8 @@ def main():
             
             if uploaded_file is not None and st.session_state.current_video != uploaded_file.name:
                 st.session_state.current_video = uploaded_file.name
-                st.session_state.angle_measurements = []
-                st.session_state.limb_measurements = []
+                st.session_state.measurements = []
+                st.session_state.pivots = []
                 st.session_state.force_vectors = []
                 st.session_state.moment_arms = []
                 
@@ -1380,160 +1128,408 @@ def main():
                 
                 # Frame principal con mediciones
                 with col1:
-                    # Activar/desactivar detección automática
-                    ai_analyze = st.checkbox("Activar análisis automático con IA", value=st.session_state.analyze_with_ai)
+                    # Preparar frame para visualización con mediciones
+                    display_frame = st.session_state.current_frame.copy()
                     
-                    if ai_analyze != st.session_state.analyze_with_ai:
-                        st.session_state.analyze_with_ai = ai_analyze
-                        # Si se activa, detectar pose inmediatamente
-                        if ai_analyze and st.session_state.current_frame is not None:
-                            detect_pose(st.session_state.current_frame)
+                    # Dibujar mediciones guardadas
+                    # Dibujar ángulos
+                    for m in st.session_state.measurements:
+                        if m["frame_index"] == st.session_state.frame_index:
+                            if m["type"] == "Ángulo" and "points" in m and len(m["points"]) == 3:
+                                draw_angle(display_frame, m["points"], m["value"], color=(231, 76, 60))
+                            elif m["type"] == "Línea" and "points" in m and len(m["points"]) == 2:
+                                unit = m.get("unit", "px")
+                                value = m.get("real_value", m["value"])
+                                draw_line(display_frame, m["points"], value, color=(46, 204, 113), unit=unit)
                     
-                    # Preparar frame para visualización
-                    if st.session_state.current_frame is not None:
-                        display_frame = st.session_state.current_frame.copy()
-                        
-                        # Si la detección automática está activada, dibujar el esqueleto
-                        if st.session_state.analyze_with_ai and st.session_state.pose_landmarks is not None:
-                            display_frame = draw_landmark_connections(display_frame)
-                            
-                            # Dibujar mediciones de ángulos
-                            for m in st.session_state.angle_measurements:
-                                if m["frame_index"] == st.session_state.frame_index and "points" in m and len(m["points"]) == 3:
-                                    draw_angle(display_frame, m["points"], m["value"], color=(255, 0, 0))
-                            
-                            # Dibujar mediciones de segmentos
-                            for m in st.session_state.limb_measurements:
-                                if m["frame_index"] == st.session_state.frame_index and "points" in m and len(m["points"]) == 2:
-                                    unit = m.get("unit", "px")
-                                    value = m.get("real_value", m["value"])
-                                    draw_line(display_frame, m["points"], value, color=(0, 255, 0), unit=unit)
-                            
-                            # Dibujar vectores de fuerza
-                            for v in st.session_state.force_vectors:
-                                if v["frame_index"] == st.session_state.frame_index and "points" in v:
-                                    draw_force_vector(display_frame, v["points"], v.get("description", ""), color=(231, 76, 60))
-                            
-                            # Dibujar brazos de momento
-                            for m in st.session_state.moment_arms:
-                                if m["frame_index"] == st.session_state.frame_index and "pivot" in m:
-                                    # Encontrar el vector asociado
-                                    if "force_vector" in m:
-                                        unit = m.get("unit", "px")
-                                        value = m.get("real_value", m["value"])
-                                        draw_moment_arm(display_frame, m["pivot"], m["force_vector"], value, color=(148, 0, 211), unit=unit)
-                        
-                        # Mostrar el frame
-                        st.image(display_frame, channels="RGB", use_column_width=True)
-                    else:
-                        st.warning("No se pudo cargar el frame del video.")
+                    # Dibujar puntos de pivote
+                    for p in st.session_state.pivots:
+                        if p["frame_index"] == st.session_state.frame_index:
+                            draw_pivot(display_frame, p["point"], color=(255, 215, 0))  # Gold
                     
-                    # Panel de análisis automático
-                    if st.session_state.analyze_with_ai and st.session_state.pose_landmarks is not None:
+                    # Dibujar vectores de fuerza
+                    for v in st.session_state.force_vectors:
+                        if v["frame_index"] == st.session_state.frame_index:
+                            draw_force_vector(display_frame, v["points"], v.get("description", ""), color=(155, 89, 182))
+                    
+                    # Dibujar brazos de momento
+                    for m in st.session_state.moment_arms:
+                        if m["frame_index"] == st.session_state.frame_index and "pivot" in m and "perpendicular_point" in m:
+                            unit = m.get("unit", "px")
+                            value = m.get("real_value", m["value"])
+                            draw_moment_arm(display_frame, m["pivot"], m["perpendicular_point"], value, color=(231, 76, 60), unit=unit)
+                    
+                    # Mostrar frame con mediciones
+                    st.image(display_frame, channels="RGB", use_column_width=True)
+                    
+                    # Selección de herramienta de dibujo
+                    st.markdown("<div class='tool-selector'>", unsafe_allow_html=True)
+                    tool_type = st.radio(
+                        "Selecciona la herramienta de análisis:",
+                        ["angle", "line", "force", "moment"],
+                        format_func=lambda x: {
+                            "angle": "Ángulo Articular", 
+                            "line": "Medir Distancia/Segmento", 
+                            "force": "Vector de Fuerza",
+                            "moment": "Brazo de Momento"
+                        }[x],
+                        horizontal=True,
+                        key="tool_select"
+                    )
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    # Actualizar estado de herramienta
+                    if tool_type != st.session_state.tool_type:
+                        st.session_state.tool_type = tool_type
+                        st.session_state.last_canvas_output = None
+                    
+                    # Panel de dibujo según herramienta seleccionada
+                    if tool_type == "angle":
                         st.markdown("""
-                        <div class='detection-panel'>
-                            <h3>Análisis Biomecánico Automático</h3>
-                            <p>La IA ha detectado al sujeto en el frame. Selecciona qué análisis quieres realizar.</p>
+                        <div class="drawing-instructions">
+                            <h4>Medir Ángulo Articular</h4>
+                            <p>Dibuja 3 círculos para medir un ángulo. El punto central será el vértice (articulación).</p>
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        col1, col2, col3 = st.columns(3)
+                        # Opciones para ángulos
+                        joint_options = ["Rodilla", "Cadera", "Hombro", "Codo", "Tobillo", "Columna", "Otro"]
+                        joint = st.selectbox("Articulación:", joint_options, key="angle_joint")
+                        angle_desc = st.text_input("Descripción del ángulo:", placeholder="Ej: Flexión de rodilla", key="angle_desc")
                         
-                        with col1:
-                            if st.button("Calcular Ángulos Articulares", key="calc_angles", type="primary", use_container_width=True):
-                                with st.spinner("Calculando ángulos articulares..."):
-                                    angle_results = analyze_all_angles()
-                                    if angle_results:
-                                        save_measurements(angle_results)
-                                        st.success(f"Se calcularon {len(angle_results)} ángulos articulares!")
-                                        st.experimental_rerun()
-                                    else:
-                                        st.error("No se pudieron detectar ángulos articulares. Intenta con otro frame.")
+                        # Canvas para dibujar ángulo
+                        canvas_result = st_canvas(
+                            fill_color="rgba(200, 0, 0, 0.3)",
+                            stroke_width=3,
+                            stroke_color="#E74C3C",  # Rojo
+                            background_image=Image.fromarray(st.session_state.current_frame),
+                            height=st.session_state.frame_height,
+                            width=st.session_state.frame_width,
+                            drawing_mode="circle",
+                            key="canvas_angle",
+                            update_streamlit=True
+                        )
                         
-                        with col2:
-                            if st.button("Medir Segmentos Corporales", key="calc_segments", type="primary", use_container_width=True):
-                                with st.spinner("Midiendo segmentos corporales..."):
-                                    segment_results = analyze_all_segments()
-                                    if segment_results:
-                                        save_measurements(segment_results)
-                                        st.success(f"Se midieron {len(segment_results)} segmentos corporales!")
-                                        st.experimental_rerun()
-                                    else:
-                                        st.error("No se pudieron detectar segmentos corporales. Intenta con otro frame.")
+                        st.session_state.last_canvas_output = canvas_result
                         
-                        with col3:
-                            if st.button("Analizar Brazos de Momento", key="calc_moments", type="primary", use_container_width=True):
-                                with st.spinner("Analizando brazos de momento..."):
-                                    moment_results = analyze_gravity_moments()
-                                    if moment_results:
-                                        save_measurements(moment_results)
-                                        st.success(f"Se calcularon {len(moment_results)} brazos de momento!")
-                                        st.experimental_rerun()
-                                    else:
-                                        st.error("No se pudieron calcular brazos de momento. Intenta con otro frame.")
+                        # Botón para guardar ángulo
+                        if st.button("Guardar Ángulo"):
+                            angle_measurement = process_canvas_result(
+                                st.session_state.last_canvas_output, 
+                                "circle", 
+                                joint=joint, 
+                                description=angle_desc
+                            )
+                            
+                            if angle_measurement:
+                                st.session_state.measurements.append(angle_measurement)
+                                st.success(f"Ángulo de {angle_measurement['joint']} guardado: {angle_measurement['value']:.1f}°")
+                                st.experimental_rerun()
+                            else:
+                                st.error("No se pudo calcular el ángulo. Asegúrate de dibujar 3 puntos.")
                     
-                    # Mostrar detección fallida
-                    elif st.session_state.analyze_with_ai and st.session_state.pose_landmarks is None:
-                        st.error("No se detectó ninguna persona en este frame. Intenta con otro frame o ajusta la posición.")
+                    elif tool_type == "line":
+                        st.markdown("""
+                        <div class="drawing-instructions">
+                            <h4>Medir Distancia/Segmento</h4>
+                            <p>Dibuja una línea para medir la distancia entre dos puntos.</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Opciones para líneas
+                        segment_options = ["Fémur", "Tibia", "Húmero", "Radio", "Tronco", "Otro"]
+                        segment = st.selectbox("Segmento:", segment_options, key="line_segment")
+                        line_desc = st.text_input("Descripción:", placeholder="Ej: Longitud del fémur", key="line_desc")
+                        
+                        # Canvas para dibujar línea
+                        canvas_result = st_canvas(
+                            stroke_width=3,
+                            stroke_color="#2ECC71",  # Verde
+                            background_image=Image.fromarray(st.session_state.current_frame),
+                            height=st.session_state.frame_height,
+                            width=st.session_state.frame_width,
+                            drawing_mode="line",
+                            key="canvas_line",
+                            update_streamlit=True
+                        )
+                        
+                        st.session_state.last_canvas_output = canvas_result
+                        
+                        # Botón para guardar línea
+                        if st.button("Guardar Medición"):
+                            line_measurement = process_canvas_result(
+                                st.session_state.last_canvas_output, 
+                                "line", 
+                                joint=segment, 
+                                description=line_desc
+                            )
+                            
+                            if line_measurement:
+                                st.session_state.measurements.append(line_measurement)
+                                
+                                # Mostrar en unidades correctas
+                                if "real_value" in line_measurement and "unit" in line_measurement:
+                                    st.success(f"Medición guardada: {line_measurement['real_value']:.1f} {line_measurement['unit']}")
+                                else:
+                                    st.success(f"Medición guardada: {line_measurement['value']:.1f} px")
+                                
+                                st.experimental_rerun()
+                            else:
+                                st.error("No se pudo calcular la distancia. Asegúrate de dibujar una línea.")
+                    
+                    elif tool_type == "force":
+                        st.markdown("""
+                        <div class="drawing-instructions">
+                            <h4>Vector de Fuerza</h4>
+                            <p>Dibuja una línea para representar un vector de fuerza. El inicio es el punto de aplicación y la dirección indica hacia dónde se dirige la fuerza.</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Opciones para vectores de fuerza
+                        force_desc = st.text_input("Descripción de la fuerza:", placeholder="Ej: Fuerza de gravedad", key="force_desc")
+                        
+                        # Canvas para dibujar vector
+                        canvas_result = st_canvas(
+                            stroke_width=3,
+                            stroke_color="#9B59B6",  # Púrpura
+                            background_image=Image.fromarray(st.session_state.current_frame),
+                            height=st.session_state.frame_height,
+                            width=st.session_state.frame_width,
+                            drawing_mode="line",
+                            key="canvas_force",
+                            update_streamlit=True
+                        )
+                        
+                        st.session_state.last_canvas_output = canvas_result
+                        
+                        # Botón para guardar vector de fuerza
+                        if st.button("Guardar Vector de Fuerza"):
+                            force_vector = process_canvas_result(
+                                st.session_state.last_canvas_output, 
+                                "arrow", 
+                                description=force_desc
+                            )
+                            
+                            if force_vector:
+                                st.session_state.force_vectors.append(force_vector)
+                                
+                                # Mostrar en unidades correctas
+                                if "real_magnitude" in force_vector and "unit" in force_vector:
+                                    st.success(f"Vector de fuerza guardado: {force_vector['real_magnitude']:.1f} {force_vector['unit']}")
+                                else:
+                                    st.success(f"Vector de fuerza guardado: {force_vector['magnitude']:.1f} px")
+                                
+                                st.experimental_rerun()
+                            else:
+                                st.error("No se pudo definir el vector. Asegúrate de dibujar una línea.")
+                    
+                    elif tool_type == "moment":
+                        st.markdown("""
+                        <div class="drawing-instructions">
+                            <h4>Análisis de Brazo de Momento</h4>
+                            <p>Primero: Selecciona un punto de pivote (articulación). Segundo: Selecciona un vector de fuerza existente.</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Mostrar vectores de fuerza disponibles
+                        frame_vectors = [v for v in st.session_state.force_vectors if v["frame_index"] == st.session_state.frame_index]
+                        
+                        if not frame_vectors:
+                            st.warning("Primero necesitas crear al menos un vector de fuerza en este frame.")
+                        else:
+                            # Opciones para pivote
+                            pivot_desc = st.text_input("Descripción del punto de pivote:", placeholder="Ej: Centro de rotación de rodilla", key="pivot_desc")
+                            
+                            # Canvas para seleccionar punto de pivote
+                            st.markdown("**Paso 1: Selecciona el punto de pivote (articulación)**")
+                            canvas_result = st_canvas(
+                                fill_color="rgba(255, 215, 0, 0.3)",
+                                stroke_width=3,
+                                stroke_color="#FFD700",  # Gold
+                                background_image=Image.fromarray(st.session_state.current_frame),
+                                height=st.session_state.frame_height,
+                                width=st.session_state.frame_width,
+                                drawing_mode="circle",
+                                key="canvas_pivot",
+                                update_streamlit=True
+                            )
+                            
+                            st.session_state.last_canvas_output = canvas_result
+                            
+                            # Botón para guardar punto de pivote
+                            if st.button("Guardar Punto de Pivote"):
+                                pivot = process_pivot_selection(
+                                    st.session_state.last_canvas_output,
+                                    description=pivot_desc
+                                )
+                                
+                                if pivot:
+                                    st.session_state.pivots.append(pivot)
+                                    st.success(f"Punto de pivote guardado.")
+                                    st.experimental_rerun()
+                                else:
+                                    st.error("No se pudo seleccionar el pivote. Asegúrate de dibujar un punto.")
+                            
+                            # Paso 2: Seleccionar un vector de fuerza existente
+                            st.markdown("**Paso 2: Selecciona un vector de fuerza existente**")
+                            
+                            # Mostrar vectores disponibles
+                            vector_options = {v["id"]: f"{v.get('description', 'Vector')} ({v.get('magnitude', 0):.1f} px)" for v in frame_vectors}
+                            selected_vector_id = st.selectbox("Vector de fuerza:", list(vector_options.keys()), format_func=lambda x: vector_options[x])
+                            
+                            # Mostrar puntos de pivote disponibles
+                            frame_pivots = [p for p in st.session_state.pivots if p["frame_index"] == st.session_state.frame_index]
+                            if frame_pivots:
+                                pivot_options = {p["id"]: f"{p.get('description', 'Pivote')}" for p in frame_pivots}
+                                selected_pivot_id = st.selectbox("Punto de pivote:", list(pivot_options.keys()), format_func=lambda x: pivot_options[x])
+                                
+                                # Botón para calcular brazo de momento
+                                if st.button("Calcular Brazo de Momento"):
+                                    # Obtener el vector y pivote seleccionados
+                                    selected_vector = next((v for v in frame_vectors if v["id"] == selected_vector_id), None)
+                                    selected_pivot = next((p for p in frame_pivots if p["id"] == selected_pivot_id), None)
+                                    
+                                    if selected_vector and selected_pivot:
+                                        moment_arm = process_moment_arm(
+                                            selected_pivot,
+                                            selected_vector,
+                                            description=f"Brazo de momento para {selected_vector.get('description', 'fuerza')}"
+                                        )
+                                        
+                                        if moment_arm:
+                                            st.session_state.moment_arms.append(moment_arm)
+                                            
+                                            # Mostrar en unidades correctas
+                                            if "real_value" in moment_arm and "unit" in moment_arm:
+                                                st.success(f"Brazo de momento calculado: {moment_arm['real_value']:.1f} {moment_arm['unit']}")
+                                            else:
+                                                st.success(f"Brazo de momento calculado: {moment_arm['value']:.1f} px")
+                                            
+                                            st.experimental_rerun()
+                                        else:
+                                            st.error("No se pudo calcular el brazo de momento.")
+                                    else:
+                                        st.error("No se encontró el vector o pivote seleccionado.")
+                            else:
+                                st.warning("Primero necesitas crear al menos un punto de pivote en este frame.")
                 
-                # Panel lateral con información y ajustes
+                # Panel lateral con información
                 with col2:
                     st.subheader("Información")
                     
-                    # Información del frame
+                    # Mostrar información del frame
                     st.text(f"Frame {st.session_state.frame_index + 1} de {st.session_state.total_frames}")
                     st.text(f"Resolución: {st.session_state.frame_width}x{st.session_state.frame_height}")
                     
-                    # Explicación de herramientas
-                    st.markdown("""
-                    <div class="info-text">
-                        <strong>Instrucciones:</strong>
-                        <ol>
-                            <li>Pausa el video en el frame deseado</li>
-                            <li>Activa el análisis con IA</li>
-                            <li>Usa los botones para calcular automáticamente:</li>
-                            <ul>
-                                <li>Ángulos articulares</li>
-                                <li>Longitudes de segmentos</li>
-                                <li>Brazos de momento</li>
-                            </ul>
-                        </ol>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # Explicación de las herramientas
+                    with st.expander("Guía de Herramientas", expanded=False):
+                        st.markdown("""
+                        **Herramientas de Análisis:**
+                        
+                        - **Ángulo Articular**: Mide ángulos entre segmentos corporales.
+                        - **Medir Distancia**: Calcula longitudes de segmentos.
+                        - **Vector de Fuerza**: Dibuja vectores para representar fuerzas.
+                        - **Brazo de Momento**: Calcula el brazo de momento (distancia perpendicular entre un punto de pivote y la línea de acción de una fuerza).
+                        
+                        **Conceptos Biomecánicos:**
+                        
+                        - **Brazo de Palanca**: Distancia desde un eje de rotación al punto de aplicación de una fuerza.
+                        - **Brazo de Momento**: Distancia perpendicular entre el eje de rotación y la línea de acción de una fuerza.
+                        - **Torque**: Producto del brazo de momento y la magnitud de la fuerza.
+                        """)
+                    
+                    # Resumen de mediciones en este frame
+                    st.subheader("Mediciones en este Frame")
+                    
+                    # Combinar todas las mediciones para este frame
+                    frame_measurements = [m for m in st.session_state.measurements if m["frame_index"] == st.session_state.frame_index]
+                    frame_vectors = [v for v in st.session_state.force_vectors if v["frame_index"] == st.session_state.frame_index]
+                    frame_pivots = [p for p in st.session_state.pivots if p["frame_index"] == st.session_state.frame_index]
+                    frame_moments = [m for m in st.session_state.moment_arms if m["frame_index"] == st.session_state.frame_index]
+                    
+                    all_measurements = frame_measurements + frame_vectors + frame_moments
+                    
+                    if not all_measurements and not frame_pivots:
+                        st.info("No hay mediciones en este frame. Utiliza las herramientas para añadir análisis.")
+                    else:
+                        # Mostrar ángulos
+                        angles = [m for m in frame_measurements if m["type"] == "Ángulo"]
+                        if angles:
+                            st.write("**Ángulos:**")
+                            for i, m in enumerate(angles):
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    st.write(f"- {m['joint']}: {m['value']:.1f}° ({m.get('description', '')})")
+                                with col2:
+                                    if st.button("🗑️", key=f"del_angle_{i}"):
+                                        st.session_state.measurements.remove(m)
+                                        st.experimental_rerun()
+                        
+                        # Mostrar líneas
+                        lines = [m for m in frame_measurements if m["type"] == "Línea"]
+                        if lines:
+                            st.write("**Distancias:**")
+                            for i, m in enumerate(lines):
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    if "real_value" in m and "unit" in m:
+                                        st.write(f"- {m['joint']}: {m['real_value']:.1f} {m['unit']} ({m.get('description', '')})")
+                                    else:
+                                        st.write(f"- {m['joint']}: {m['value']:.1f} px ({m.get('description', '')})")
+                                with col2:
+                                    if st.button("🗑️", key=f"del_line_{i}"):
+                                        st.session_state.measurements.remove(m)
+                                        st.experimental_rerun()
+                        
+                        # Mostrar pivotes
+                        if frame_pivots:
+                            st.write("**Puntos de Pivote:**")
+                            for i, p in enumerate(frame_pivots):
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    st.write(f"- {p.get('description', 'Pivote')}")
+                                with col2:
+                                    if st.button("🗑️", key=f"del_pivot_{i}"):
+                                        st.session_state.pivots.remove(p)
+                                        st.experimental_rerun()
+                        
+                        # Mostrar vectores de fuerza
+                        if frame_vectors:
+                            st.write("**Vectores de Fuerza:**")
+                            for i, v in enumerate(frame_vectors):
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    if "real_magnitude" in v and "unit" in v:
+                                        st.write(f"- {v.get('description', 'Vector')}: {v['real_magnitude']:.1f} {v['unit']}")
+                                    else:
+                                        st.write(f"- {v.get('description', 'Vector')}: {v['magnitude']:.1f} px")
+                                with col2:
+                                    if st.button("🗑️", key=f"del_vector_{i}"):
+                                        # También eliminar brazos de momento asociados
+                                        st.session_state.moment_arms = [m for m in st.session_state.moment_arms if m.get("force_vector_id") != v["id"]]
+                                        st.session_state.force_vectors.remove(v)
+                                        st.experimental_rerun()
+                        
+                        # Mostrar brazos de momento
+                        if frame_moments:
+                            st.write("**Brazos de Momento:**")
+                            for i, m in enumerate(frame_moments):
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    if "real_value" in m and "unit" in m:
+                                        st.write(f"- {m.get('description', 'Brazo de Momento')}: {m['real_value']:.1f} {m['unit']}")
+                                    else:
+                                        st.write(f"- {m.get('description', 'Brazo de Momento')}: {m['value']:.1f} px")
+                                with col2:
+                                    if st.button("🗑️", key=f"del_moment_{i}"):
+                                        st.session_state.moment_arms.remove(m)
+                                        st.experimental_rerun()
                     
                     # Exportar frame actual
                     if st.button("Exportar Frame con Análisis"):
                         if st.session_state.current_frame is not None:
                             # Preparar frame para exportación
-                            export_frame = st.session_state.current_frame.copy()
-                            
-                            # Añadir todas las mediciones
-                            if st.session_state.pose_landmarks is not None:
-                                export_frame = draw_landmark_connections(export_frame)
-                                
-                                # Dibujar mediciones de ángulos
-                                for m in st.session_state.angle_measurements:
-                                    if m["frame_index"] == st.session_state.frame_index and "points" in m:
-                                        draw_angle(export_frame, m["points"], m["value"], color=(255, 0, 0))
-                                
-                                # Dibujar mediciones de segmentos
-                                for m in st.session_state.limb_measurements:
-                                    if m["frame_index"] == st.session_state.frame_index and "points" in m:
-                                        unit = m.get("unit", "px")
-                                        value = m.get("real_value", m["value"])
-                                        draw_line(export_frame, m["points"], value, color=(0, 255, 0), unit=unit)
-                                
-                                # Dibujar vectores de fuerza
-                                for v in st.session_state.force_vectors:
-                                    if v["frame_index"] == st.session_state.frame_index and "points" in v:
-                                        draw_force_vector(export_frame, v["points"], v.get("description", ""), color=(231, 76, 60))
-                                
-                                # Dibujar brazos de momento
-                                for m in st.session_state.moment_arms:
-                                    if m["frame_index"] == st.session_state.frame_index and "pivot" in m and "force_vector" in m:
-                                        unit = m.get("unit", "px")
-                                        value = m.get("real_value", m["value"])
-                                        draw_moment_arm(export_frame, m["pivot"], m["force_vector"], value, color=(148, 0, 211), unit=unit)
+                            export_frame = display_frame.copy()  # Ya tiene todas las mediciones dibujadas
                             
                             # Guardar imagen temporalmente
                             img_path = os.path.join("temp", f"frame_export_{uuid.uuid4()}.jpg")
@@ -1551,77 +1547,16 @@ def main():
                             # Limpiar archivo
                             if os.path.exists(img_path):
                                 os.remove(img_path)
-                
-                # Mostrar resultados del análisis
-                if st.session_state.analyze_with_ai and st.session_state.pose_landmarks is not None:
-                    st.subheader("Resultados del Análisis")
                     
-                    # Filtrar mediciones del frame actual
-                    frame_angles = [m for m in st.session_state.angle_measurements if m["frame_index"] == st.session_state.frame_index]
-                    frame_segments = [m for m in st.session_state.limb_measurements if m["frame_index"] == st.session_state.frame_index]
-                    frame_moments = [m for m in st.session_state.moment_arms if m["frame_index"] == st.session_state.frame_index]
-                    
-                    tab1, tab2, tab3 = st.tabs(["Ángulos", "Segmentos", "Brazos de Momento"])
-                    
-                    with tab1:
-                        if not frame_angles:
-                            st.info("No hay mediciones de ángulos para este frame. Usa el botón 'Calcular Ángulos Articulares'.")
-                        else:
-                            for i, m in enumerate(frame_angles):
-                                st.markdown(f"""
-                                <div class="analysis-result">
-                                    <span class="angle-name">{m["joint"]}</span>: <span class="result-value">{m["value"]:.1f}°</span>
-                                    <p>{m.get("description", "")}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                if st.button("Eliminar", key=f"del_angle_{i}"):
-                                    st.session_state.angle_measurements.remove(m)
-                                    st.experimental_rerun()
-                    
-                    with tab2:
-                        if not frame_segments:
-                            st.info("No hay mediciones de segmentos para este frame. Usa el botón 'Medir Segmentos Corporales'.")
-                        else:
-                            for i, m in enumerate(frame_segments):
-                                unit = m.get("unit", "px")
-                                value = m.get("real_value", m["value"])
-                                
-                                st.markdown(f"""
-                                <div class="analysis-result">
-                                    <span class="segment-name">{m["joint"]}</span>: <span class="result-value">{value:.1f} {unit}</span>
-                                    <p>{m.get("description", "")}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                if st.button("Eliminar", key=f"del_segment_{i}"):
-                                    st.session_state.limb_measurements.remove(m)
-                                    st.experimental_rerun()
-                    
-                    with tab3:
-                        if not frame_moments:
-                            st.info("No hay análisis de brazos de momento para este frame. Usa el botón 'Analizar Brazos de Momento'.")
-                        else:
-                            for i, m in enumerate(frame_moments):
-                                unit = m.get("unit", "px")
-                                value = m.get("real_value", m["value"])
-                                
-                                st.markdown(f"""
-                                <div class="analysis-result">
-                                    <span class="moment-name">{m["joint"]}</span>: <span class="result-value">{value:.1f} {unit}</span>
-                                    <p>{m.get("description", "")}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                if st.button("Eliminar", key=f"del_moment_{i}"):
-                                    # Encontrar y eliminar el vector de fuerza asociado
-                                    if "force_vector_id" in m:
-                                        vector = next((v for v in st.session_state.force_vectors if v["id"] == m["force_vector_id"]), None)
-                                        if vector:
-                                            st.session_state.force_vectors.remove(vector)
-                                    
-                                    st.session_state.moment_arms.remove(m)
-                                    st.experimental_rerun()
+                    # Borrar mediciones del frame
+                    if st.button("Borrar Mediciones de este Frame", type="secondary"):
+                        # Filtrar mediciones que no son del frame actual
+                        st.session_state.measurements = [m for m in st.session_state.measurements if m["frame_index"] != st.session_state.frame_index]
+                        st.session_state.pivots = [p for p in st.session_state.pivots if p["frame_index"] != st.session_state.frame_index]
+                        st.session_state.force_vectors = [v for v in st.session_state.force_vectors if v["frame_index"] != st.session_state.frame_index]
+                        st.session_state.moment_arms = [m for m in st.session_state.moment_arms if m["frame_index"] != st.session_state.frame_index]
+                        st.success("Mediciones borradas correctamente!")
+                        st.experimental_rerun()
                 
                 # Formulario para datos de la sesión
                 st.subheader("Guardar Sesión")
@@ -1646,21 +1581,34 @@ def main():
                         if not exercise:
                             st.error("Por favor, ingresa el nombre del ejercicio.")
                         else:
-                            # Crear datos para enviar
-                            form_data = {
+                            # Recopilar todas las mediciones
+                            all_session_measurements = []
+                            all_session_measurements.extend(st.session_state.measurements)
+                            all_session_measurements.extend(st.session_state.pivots)
+                            all_session_measurements.extend(st.session_state.force_vectors)
+                            all_session_measurements.extend(st.session_state.moment_arms)
+                            
+                            # Crear datos de la sesión
+                            session_data = {
+                                "id": str(uuid.uuid4()),
+                                "client_id": client["id"],
                                 "date": session_date.strftime("%Y-%m-%d"),
                                 "exercise": exercise,
                                 "sets": sets,
                                 "reps": reps,
                                 "rir": rir,
-                                "comments": comments
+                                "comments": comments,
+                                "measurements": all_session_measurements,
+                                "video_name": st.session_state.current_video,
+                                "calibration_factor": st.session_state.calibration_factor,
+                                "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             }
                             
-                            # Guardar sesión
-                            if save_session_data(client, form_data):
-                                st.success("Sesión guardada correctamente! Puedes generar el informe en la pestaña 'Informes'.")
-                            else:
-                                st.error("Error al guardar la sesión. Inténtalo de nuevo.")
+                            # Añadir a las sesiones
+                            sessions.append(session_data)
+                            save_sessions(sessions)
+                            
+                            st.success("Sesión guardada correctamente! Puedes generar el informe en la pestaña 'Informes'.")
     
     # Pestaña 3: Visualización de Datos
     with tab3:
@@ -1768,25 +1716,25 @@ def main():
                             
                             for m in session["measurements"]:
                                 if m["type"] == "Ángulo":
-                                    st.write(f"- {m.get('joint', '')}: {m['value']:.1f}° ({m.get('description', '')})")
+                                    st.write(f"- {m.get('joint', 'Ángulo')}: {m['value']:.1f}° ({m.get('description', '')})")
                                 elif m["type"] == "Línea":
                                     if calibration != 1.0 and "value" in m:
-                                        real_distance = m['value'] / calibration
+                                        real_distance = m.get("real_value", m["value"] / calibration)
                                         st.write(f"- {m.get('joint', 'Distancia')}: {real_distance:.1f} cm ({m.get('description', '')})")
                                     else:
                                         st.write(f"- {m.get('joint', 'Distancia')}: {m.get('value', 0):.1f} px ({m.get('description', '')})")
-                                elif m["type"] == "Vector de Fuerza" and "magnitude" in m:
-                                    if calibration != 1.0:
-                                        real_magnitude = m['magnitude'] / calibration
+                                elif m["type"] == "Vector de Fuerza":
+                                    if calibration != 1.0 and "magnitude" in m:
+                                        real_magnitude = m.get("real_magnitude", m["magnitude"] / calibration)
                                         st.write(f"- Vector de Fuerza: {real_magnitude:.1f} cm ({m.get('description', '')})")
-                                    else:
+                                    elif "magnitude" in m:
                                         st.write(f"- Vector de Fuerza: {m['magnitude']:.1f} px ({m.get('description', '')})")
                                 elif m["type"] == "Brazo de Momento" and "value" in m:
                                     if calibration != 1.0:
-                                        real_value = m['value'] / calibration
-                                        st.write(f"- {m.get('joint', 'Brazo de Momento')}: {real_value:.1f} cm ({m.get('description', '')})")
+                                        real_value = m.get("real_value", m["value"] / calibration)
+                                        st.write(f"- Brazo de Momento: {real_value:.1f} cm ({m.get('description', '')})")
                                     else:
-                                        st.write(f"- {m.get('joint', 'Brazo de Momento')}: {m['value']:.1f} px ({m.get('description', '')})")
+                                        st.write(f"- Brazo de Momento: {m['value']:.1f} px ({m.get('description', '')})")
     
     # Pestaña 4: Generación de Informes
     with tab4:
@@ -1831,46 +1779,41 @@ def main():
                 if st.button("Generar Informe PDF", type="primary"):
                     with st.spinner("Generando informe..."):
                         try:
-                            # Cargar un frame para el informe
+                            # Recrear un frame con análisis
+                            frame_with_analysis = None
+                            
                             if st.session_state.current_video_path is not None and st.session_state.current_frame is not None:
-                                frame_with_analysis = st.session_state.current_frame.copy()
+                                # Encontrar el frame con más mediciones
+                                frame_counts = {}
+                                for m in selected_session.get("measurements", []):
+                                    frame_idx = m.get("frame_index", 0)
+                                    if frame_idx not in frame_counts:
+                                        frame_counts[frame_idx] = 0
+                                    frame_counts[frame_idx] += 1
                                 
-                                # Aplicar las mediciones al frame
-                                if "measurements" in selected_session:
-                                    # Encontrar el frame con más mediciones
-                                    frame_counts = {}
-                                    for m in selected_session["measurements"]:
-                                        frame_idx = m.get("frame_index", 0)
-                                        if frame_idx not in frame_counts:
-                                            frame_counts[frame_idx] = 0
-                                        frame_counts[frame_idx] += 1
+                                if frame_counts:
+                                    best_frame = max(frame_counts.items(), key=lambda x: x[1])[0]
+                                    # Cargar el frame
+                                    get_frame(best_frame)
+                                    frame_with_analysis = st.session_state.current_frame.copy()
                                     
-                                    if frame_counts:
-                                        best_frame = max(frame_counts.items(), key=lambda x: x[1])[0]
-                                        get_frame(best_frame)
-                                        frame_with_analysis = st.session_state.current_frame.copy()
-                                        
-                                        # Detectar pose para el frame
-                                        detect_pose(frame_with_analysis)
-                                        
-                                        # Dibujar esqueleto si hay landmarks
-                                        if st.session_state.pose_landmarks is not None:
-                                            frame_with_analysis = draw_landmark_connections(frame_with_analysis)
-                                        
-                                        # Dibujar mediciones en este frame
-                                        for m in selected_session["measurements"]:
-                                            if m.get("frame_index") == best_frame:
-                                                if m["type"] == "Ángulo" and "points" in m and len(m["points"]) == 3:
-                                                    draw_angle(frame_with_analysis, m["points"], m["value"], color=(255, 0, 0))
-                                                elif m["type"] == "Línea" and "points" in m and len(m["points"]) == 2:
-                                                    calibration = selected_session.get("calibration_factor", 1.0)
-                                                    if calibration != 1.0 and "value" in m:
-                                                        real_value = m["value"] / calibration
-                                                        draw_line(frame_with_analysis, m["points"], real_value, color=(0, 255, 0), unit="cm")
-                                                    else:
-                                                        draw_line(frame_with_analysis, m["points"], m["value"], color=(0, 255, 0))
-                            else:
-                                frame_with_analysis = None
+                                    # Dibujar mediciones
+                                    for m in selected_session.get("measurements", []):
+                                        if m.get("frame_index") == best_frame:
+                                            if m["type"] == "Ángulo" and "points" in m and len(m["points"]) == 3:
+                                                draw_angle(frame_with_analysis, m["points"], m["value"], color=(231, 76, 60))
+                                            elif m["type"] == "Línea" and "points" in m and len(m["points"]) == 2:
+                                                unit = m.get("unit", "px")
+                                                value = m.get("real_value", m["value"])
+                                                draw_line(frame_with_analysis, m["points"], value, color=(46, 204, 113), unit=unit)
+                                            elif m["type"] == "Pivote" and "point" in m:
+                                                draw_pivot(frame_with_analysis, m["point"], color=(255, 215, 0))
+                                            elif m["type"] == "Vector de Fuerza" and "points" in m:
+                                                draw_force_vector(frame_with_analysis, m["points"], m.get("description", ""), color=(155, 89, 182))
+                                            elif m["type"] == "Brazo de Momento" and "pivot" in m and "perpendicular_point" in m:
+                                                unit = m.get("unit", "px")
+                                                value = m.get("real_value", m["value"])
+                                                draw_moment_arm(frame_with_analysis, m["pivot"], m["perpendicular_point"], value, color=(231, 76, 60), unit=unit)
                             
                             # Generar gráficos de progreso para el PDF
                             # Preparar datos para gráficos
